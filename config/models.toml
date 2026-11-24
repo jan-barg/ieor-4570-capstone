@@ -1,0 +1,99 @@
+# Stringer model layer (settled Nov 24: one LiteLLM layer).
+# Each pipeline step names one model alias; evals swap models by editing one line under [steps].
+# Prices are USD per million tokens, from the Vertex and Anthropic price lists (map, Cross-cutting,
+# Nov 24). Code computes cost from these, so the log shows cost even for models LiteLLM doesn't know.
+
+[vertex]
+project = "agentic-ai-msds"
+location = "global"
+# The gcloud login's quota project differs, so every Vertex call names the billing project.
+user_project_header = "agentic-ai-msds"
+
+[anthropic]
+keychain_item = "anthropic_api_key"
+
+[langfuse]
+# Keychain items; when they are missing, calls are still logged locally (stringer_private/runs/).
+public_key_item = "langfuse_public_key"
+secret_key_item = "langfuse_secret_key"
+host_item = "langfuse_host"          # optional; default https://cloud.langfuse.com
+
+[steps]
+query_writer = "gemini-3.5-flash-lite"   # module 1: reworded, side and background queries
+same_story = "deepseek-v4.1-flash"       # module 2 (to be chosen by its eval)
+lens = "deepseek-v4.1-flash"             # module 4 (to be chosen by its eval)
+brief_read = "haiku-5-5"                 # module 5 step 1 (shortlist below)
+brief_merge = "sonnet-5-5"               # module 5 step 2
+brief_sides = "sonnet-5-5"               # module 5 step 4
+fact_check = "sonnet-5-5"                # module 6 judge
+script = "sonnet-5-5"                    # module 7
+
+# ---- Models. shortlist = true: the smoke test checks it answers and reports cached tokens ----
+
+[models."haiku-5-5"]
+litellm = "anthropic/claude-haiku-5-5"
+provider = "anthropic"
+input = 0.10
+output = 0.50
+cached_input = 0.01
+cache_write = 0.125        # 1.25x input (5-minute cache)
+shortlist = true
+
+[models."sonnet-5-5"]
+litellm = "anthropic/claude-sonnet-5-5"
+provider = "anthropic"
+input = 2.00
+output = 10.00
+cached_input = 0.10
+cache_write = 2.50
+shortlist = true
+
+[models."opus-5-5"]
+litellm = "anthropic/claude-opus-5-5"
+provider = "anthropic"
+input = 4.00
+output = 20.00
+cached_input = 0.20
+cache_write = 5.00
+shortlist = true
+
+[models."gpt-oss-120b"]
+litellm = "vertex_ai/openai/gpt-oss-120b-maas"
+provider = "vertex"
+input = 0.09
+output = 0.36
+cached_input = 0.09        # no cache discount seen (Nov 24)
+shortlist = true
+
+[models."deepseek-v4.1-flash"]
+litellm = "vertex_ai/deepseek-ai/deepseek-v4.1-flash-maas"
+provider = "vertex"
+input = 0.30
+output = 1.20
+cached_input = 0.006
+shortlist = true
+
+[models."glm-5.2"]
+litellm = "vertex_ai/zai-org/glm-5.2-maas"
+provider = "vertex"
+input = 1.40
+output = 4.40
+cached_input = 0.14
+shortlist = true
+
+[models."gemini-3.5-flash-lite"]
+litellm = "vertex_ai/gemini-3.5-flash-lite"
+provider = "vertex"
+input = 0.30
+output = 2.50
+cached_input = 0.03
+shortlist = true
+
+[models."gemini-3.6-flash"]
+litellm = "vertex_ai/gemini-3.6-flash"
+provider = "vertex"
+input = 0.75                # sale price through Dec 31
+output = 3.75
+cached_input = 0.075
+shortlist = true
+note = "404 from agentic-ai-msds on Nov 24 (global and us-central1), though it is in the model list"

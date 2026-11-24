@@ -1,0 +1,18 @@
+[project]
+name = "stringer"
+version = "0.1.0"
+description = "Monitor the Situation events to sourced, balance-checked 60-second explainers"
+requires-python = ">=3.12"
+dependencies = [
+    "litellm==1.108.5",   # pinned: two weeks old at install (Nov 24); avoid same-day releases
+    "langfuse==5.2.0",
+    "google-auth",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.4"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["live: calls real APIs and costs money or credits; run with STRINGER_LIVE=1"]
