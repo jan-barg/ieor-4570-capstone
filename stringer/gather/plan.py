@@ -7,7 +7,8 @@
   4  side B               general for the rest       side B's outlets                side query   10
   5  right tail         general (US lens only)       right outlets minus Fox/NY Post title        10
   6  Guardian           Guardian API                 theguardian.com                 title keywords;
-                                                                                     reworded joined with OR  20 each
+                                                                                     reworded joined with OR  20 each,
+                                                                                     top 8 kept (see cut_guardian)
      own sources        Extract (Guardian links via the API)  the event's links minus X posts
      background         general                      every news/wire row, end_date = day before   10
 
@@ -25,10 +26,15 @@ from dataclasses import dataclass, field
 from ..events import Event
 from ..outlets import OutletTable
 from .clients import BudgetExceeded, Guardian, Tavily
-from .merge import Hit, url_key
+from .merge import Hit, is_guardian_noise, url_key
 from .queries import QuerySet, terms
 from .sides import Lens, split_by_mode, us_sides
 
+# Per Guardian search, keep the top 8 by relevance, not counting liveblogs and newsletters (merge
+# drops those). Nov 24 check on the 40 frozen stories, labeled blind to rank: #1 is on the event
+# ~83% of the time, #4-5 ~50%, #8-10 ~28%, past #15 under 10%. Top 8 keeps 85% of the on-topic
+# Guardian articles and halves the pile (21 -> 11 per story).
+GUARDIAN_KEEP = 8
 THIN = 5
 RETRY_WAIT_S = 30
 X_HOSTS = ("x.com/", "twitter.com/")
@@ -136,8 +142,31 @@ def guardian_searches(g: Guardian, ev: Event, qs: QuerySet, end_date, trace_id=N
         rec = g.search(f"{ev.short}/{qid}", q, day(ev.start), end_date, trace_id=trace_id)
         res = (rec.get("response") or {}).get("results", []) if rec.get("status") == 200 else []
         logs.append(dict(qid=qid, query=q, status=rec.get("status"), results=len(res), cached=rec.get("cached")))
-        hits += [guardian_hit(r, qid, i + 1) for i, r in enumerate(res)]
+        clean = 0
+        for i, r in enumerate(res):
+            h = guardian_hit(r, qid, i + 1)
+            if not is_guardian_noise(h.url, h.extra):
+                clean += 1
+                h.extra["clean_rank"] = clean    # rank among real articles, used by cut_guardian
+            hits.append(h)
     return hits, logs
+
+
+def cut_guardian(hits: list[Hit], keep: int = GUARDIAN_KEEP) -> tuple[list[Hit], int]:
+    """Drop Guardian search results ranked below `keep` in their search. A result survives if it
+    made the cut in the other Guardian search, or if Tavily found it too. (The event's own Guardian
+    links are fetched after this, so they are never cut.) Returns the hits and how many distinct
+    articles were cut."""
+    elsewhere = {url_key(h.url) for h in hits if h.via != "guardian_api"}
+    out, cut = [], set()
+    for h in hits:
+        r = h.extra.get("clean_rank") if h.via == "guardian_api" else None
+        if r is not None and r > keep and url_key(h.url) not in elsewhere:
+            cut.add(url_key(h.url))
+            continue
+        out.append(h)
+    kept = {url_key(h.url) for h in out}
+    return out, len(cut - kept)
 
 
 def guardian_items(g: Guardian, ev: Event, urls: list[str], qid: str, trace_id=None) -> tuple[list[Hit], list[dict]]:
@@ -223,6 +252,7 @@ def run_plan(ev: Event, lens: Lens, qs: QuerySet, t: OutletTable, tv: Tavily, g:
         eh, elog = f_extract.result()
         hits += eh
         log["own"] = dict(elog, guardian_links=len(g_own), x_posts=len(xposts))
+    hits, log["guardian_cut"] = cut_guardian(hits)
     # Guardian links: the event's own, plus any Tavily found that the API searches didn't return
     have = {url_key(h.url) for h in hits if h.via == "guardian_api"}
     tav_guardian = list(dict.fromkeys(h.url for h in hits if h.via != "guardian_api"

@@ -199,6 +199,30 @@ class FakeGuardian(clients.Guardian):
             "fields": {"bodyText": "O" * 4000, "firstPublicationDate": "2026-11-17T06:00:00Z"}}}}
 
 
+class RankedGuardian(clients.Guardian):
+    """Search 1 returns g1..g12 with a liveblog at #2; search 2 returns only g12."""
+    def get(self, path, params, save_as, trace_id=None):
+        def art(i):
+            live = i == 2 and "g1_title" in save_as
+            return {"webUrl": f"https://www.theguardian.com/world/{'live/' if live else ''}2026/nov/17/g{i}",
+                    "type": "liveblog" if live else "article", "fields": {}}
+        res = [art(i) for i in range(1, 13)] if "g1_title" in save_as else [art(12)]
+        return {"status": 200, "response": {"results": res}, "cached": False}
+
+
+def test_guardian_keeps_top_8_real_articles_per_search():
+    """The liveblog at #2 doesn't count, so search 1 keeps #1 and #3-9 (g1, g3..g9) plus the
+    liveblog, which merge drops later. g10-g12 fall below the cut, but g12 is #1 in search 2 and
+    Tavily also found g11, so only g10 is cut."""
+    qs = queries.QuerySet(core="Kerch bridge span", reworded="Kerch bridge road span destroyed", background="")
+    hits, _ = plan.guardian_searches(RankedGuardian(), event(), qs, "2026-11-19")
+    hits.append(Hit("https://www.theguardian.com/world/2026/nov/17/g11", "tavily_search", "q1_core", 4))
+    out, cut = plan.cut_guardian(hits)
+    kept = {h.url.rsplit("/", 1)[-1] for h in out if h.via == "guardian_api"}
+    assert kept == {"g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8", "g9", "g11", "g12"}
+    assert cut == 1
+
+
 def test_thin_results_retry_then_stop(tmp_path):
     tv = FakeTavily([3, 8], raw_dir=str(tmp_path))
     s = plan.Search("q1_core", {"query": "x", "topic": "news", "include_domains": ["cnn.com"]})

@@ -183,6 +183,8 @@ def test_side_lists_point_at_real_rows(t):
 
 # 8. Golden set, copied by hand from AllSides pages (Nov 24), Lin et al. 2023 and SMM 2026 ----
 # url, AllSides news lean (None = no rating), Lin score (None = not in Lin), SMM level
+# An outlet with several addresses takes its LOWEST Lin score for every address (rule set Nov 24),
+# so bbc.com, abcnews.go.com and presstv.ir below carry their sister address's score.
 GOLDEN = [
     ("https://www.cnn.com/a/b", "Lean Left", 0.66, None),
     ("https://www.foxnews.com/a/b", "Right", 0.53, None),
@@ -190,7 +192,7 @@ GOLDEN = [
     ("https://www.nytimes.com/2026/11/05/us/a.html", "Lean Left", 0.86, None),
     ("https://apnews.com/article/a", "Lean Left", 1.00, None),
     ("https://www.reuters.com/world/a", "Center", 1.00, None),
-    ("https://www.bbc.com/news/a", "Center", 0.88, "Independent Public"),
+    ("https://www.bbc.com/news/a", "Center", 0.72, "Independent Public"),         # bbc.co.uk
     ("https://www.theguardian.com/world/a/b", "Left", 0.75, None),
     ("https://www.aljazeera.com/news/a/b", "Lean Left", 0.78, "State-Controlled"),
     ("https://www.npr.org/2026/11/05/a", "Lean Left", 0.93, "Independent Public"),
@@ -208,12 +210,12 @@ GOLDEN = [
     ("https://www.wsj.com/politics/a", "Center", 0.80, None),
     ("https://www.bloomberg.com/news/articles/a", "Center", 0.84, None),
     ("https://www.cnbc.com/2026/11/05/a.html", "Lean Left", 0.85, None),
-    ("https://abcnews.go.com/Politics/a", "Lean Left", 0.86, None),
+    ("https://abcnews.go.com/Politics/a", "Lean Left", 0.67, None),             # abcnews.com
     ("https://www.ms.now/news/a", "Left", 0.59, None),
     ("https://www.thefp.com/p/a", "Lean Right", None, None),
     ("https://kyivindependent.com/a/", "Center", 0.62, None),
     ("https://www.jpost.com/israel-news/a", "Center", 0.81, None),
-    ("https://www.presstv.ir/Detail/2026/11/05/1/a", None, 0.69, "State-Controlled"),
+    ("https://www.presstv.ir/Detail/2026/11/05/1/a", None, 0.23, "State-Controlled"),  # presstv.com
     ("https://www.tasnimnews.com/en/news/2026/11/05/1/a", None, 0.30, "Captured Private"),
     ("https://www.abc.net.au/news/a/1", None, 0.89, "Independent State-Funded"),
     ("https://www.pbs.org/newshour/politics/a", "Lean Left", 0.87, "Independent Public"),

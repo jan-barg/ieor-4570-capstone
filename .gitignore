@@ -7,9 +7,10 @@ __pycache__/
 *.egg-info/
 .DS_Store
 
-# Secrets: keys live in the macOS Keychain, never in files
+# Secrets: keys live in .env, which is never committed (.env.example lists the names)
 .env
 .env.*
+!.env.example
 
 # Data never goes in this repo: articles, fixtures, outlet tables and logs live in ../stringer_private/
 stringer_private/

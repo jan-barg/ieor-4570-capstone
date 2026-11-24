@@ -4,8 +4,8 @@ second of two calls with the same long prefix reports how many input tokens came
     .venv/bin/python scripts/smoke_models.py            # all shortlisted models
     .venv/bin/python scripts/smoke_models.py glm-5.2    # some of them
 
-Costs well under a cent per model. Claude models are skipped when the Keychain has no
-anthropic_api_key. Results go to stringer_private/runs/smoke_models.json and the call log."""
+Costs well under a cent per model. Claude models are skipped when .env has no
+ANTHROPIC_API_KEY. Results go to stringer_private/runs/smoke_models.json and the call log."""
 import json
 import sys
 import time
@@ -29,7 +29,7 @@ QUESTIONS = ["Which rule number comes first? Answer with the number only.",
 def run(alias: str, trace_id: str) -> dict:
     m = models.spec(alias)
     if m["provider"] == "anthropic" and not keys.has(models.config()["anthropic"]["keychain_item"]):
-        return dict(model=alias, status="skipped: no anthropic_api_key in Keychain")
+        return dict(model=alias, status="skipped: no ANTHROPIC_API_KEY in .env")
     out = dict(model=alias, litellm=m["litellm"], calls=[])
     for q in QUESTIONS:
         msgs = [{"role": "user", "content": [models.cache_block(PREFIX), models.text_block(q)]}]
@@ -67,7 +67,7 @@ def main(aliases):
         cost = sum(x.get("cost_usd", 0) for x in r["calls"])
         print(f"{r['model']:24} {r['status']:12} {c.get('cached', '-'):>11}/{c.get('prompt', '-'):<12} "
               f"{cost:9.5f}  {c.get('answer', c.get('error', ''))[:40]!r}")
-    print("Langfuse:", "on" if tracing.langfuse_on() else "off (no keys in Keychain); local log only")
+    print("Langfuse:", "on" if tracing.langfuse_on() else "off (no Langfuse keys in .env); local log only")
     return results
 
 

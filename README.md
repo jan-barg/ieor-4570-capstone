@@ -16,9 +16,9 @@ python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest -q          # offline, no keys needed except outlets.csv in stringer_private
 ```
 
-Keys come from the macOS Keychain (or an upper-case environment variable of the same name):
-`tavily_api_key`, `guardian_api_key`, `anthropic_api_key`, `langfuse_public_key`,
-`langfuse_secret_key` (optional `langfuse_host`). Vertex models use Application Default
+Keys go in `.env` (git-ignored; copy `.env.example`): `TAVILY_API_KEY`, `GUARDIAN_API_KEY`,
+`ANTHROPIC_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (optional `LANGFUSE_HOST`).
+A real environment variable wins over the file; the macOS Keychain is a fallback. Vertex models use Application Default
 Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project` header).
 
 ## Layout
@@ -42,6 +42,7 @@ Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project`
 .venv/bin/python -m scripts.smoke_models                       # costs a few cents
 .venv/bin/python -m scripts.freeze_fixtures --dry-run          # plan and credit estimate, free
 .venv/bin/python -m scripts.freeze_fixtures --writer model     # the real run (cap: 400 credits)
+.venv/bin/python -m scripts.remerge_frozen                     # rebuild frozen stories with current code, free
 .venv/bin/python -m scripts.coverage_report
 .venv/bin/python build/build_outlets.py --force                # rebuild outlets.csv from the seed
 ```

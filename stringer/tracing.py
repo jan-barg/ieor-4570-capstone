@@ -2,8 +2,8 @@
 
 Two sinks:
   1. always: one JSON line per event in stringer_private/runs/calls-<UTC date>.jsonl
-  2. Langfuse, when its keys are in the Keychain (langfuse_public_key, langfuse_secret_key,
-     optional langfuse_host). One trace per story/run, one generation per model call, one span
+  2. Langfuse, when its keys are set in .env (LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
+     optional LANGFUSE_HOST). One trace per story/run, one generation per model call, one span
      per search.
 
 Inputs and outputs are not copied into the local log (they can hold article text); Langfuse gets

@@ -14,7 +14,7 @@ from .queries import QuerySet, model_queries, template_queries
 from .sides import Lens
 from .store import ArticleCache, write_story
 
-VERSION = "gather-1.0 (2026-11-24)"
+VERSION = "gather-1.1 (2026-11-24, Guardian top 8)"
 
 
 def gather_event(ev: Event, lens: Lens, t: OutletTable, tv: Tavily, g: Guardian, *,

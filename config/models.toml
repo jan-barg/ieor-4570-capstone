@@ -13,7 +13,7 @@ user_project_header = "agentic-ai-msds"
 keychain_item = "anthropic_api_key"
 
 [langfuse]
-# Keychain items; when they are missing, calls are still logged locally (stringer_private/runs/).
+# Key names (looked up upper-case in .env); when they are missing, calls are still logged locally (stringer_private/runs/).
 public_key_item = "langfuse_public_key"
 secret_key_item = "langfuse_secret_key"
 host_item = "langfuse_host"          # optional; default https://cloud.langfuse.com
