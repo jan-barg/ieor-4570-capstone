@@ -17,4 +17,6 @@ STORIES = FROZEN / "stories"
 ARTICLE_CACHE = FROZEN / "article_cache"
 RAW = FROZEN / "raw"            # every API response, so re-runs cost nothing
 RUNS = PRIVATE / "runs"         # local call log (model calls, searches)
+EVALS = PRIVATE / "evals"       # eval results (runs/), the model-answer cache (cache/), comparison tables
+FIXTURES = PRIVATE / "fixtures"  # hand-made answer keys and the samples they label
 OUTLET_SOURCES = PRIVATE / "outlet_labels_tests"

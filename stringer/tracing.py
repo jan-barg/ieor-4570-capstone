@@ -80,6 +80,12 @@ class Tracer:
             s.update(output=_clip(output))
             s.end()
 
+    def score(self, *, trace_id, name, value, comment=None):
+        """A score on a trace (evals put their headline numbers here)."""
+        self._local(dict(kind="score", trace_id=trace_id, name=name, value=value))
+        if self.lf is not None and trace_id:
+            self.lf.create_score(name=name, value=value, trace_id=trace_id, comment=comment)
+
     def flush(self):
         if self.lf is not None:
             self.lf.flush()
