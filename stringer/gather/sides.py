@@ -30,6 +30,17 @@ class Lens:
     kind: str            # us | world | none
     sides: list[Side]
     source: str = ""
+    local: Side | None = None   # one country's press: searched for coverage, never compared
+
+
+def local_press(t: OutletTable, country: str) -> Side | None:
+    """Every news or wire outlet in outlets.csv from one country (Nov 24). Used for stories with no
+    real split, which have no side searches, so their local outlets would otherwise go unsearched
+    (e.g. the Krakow shooting kept 0 of its 20 Polish articles)."""
+    ids = [o.outlet_id for o in t.outlets if o.country == country and o.kind in ("news", "wire")]
+    if not ids:
+        return None
+    return Side(f"local_{country.lower()}", f"{country} outlets (searched for coverage, not a side)", ids)
 
 
 def us_sides(t: OutletTable) -> dict[str, Side]:
@@ -60,7 +71,8 @@ def fixture_lenses(t: OutletTable) -> dict[str, Lens]:
     with open(paths.FIXTURE_LENSES_CSV, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             ss = [sides[s] for s in (r["side_a"], r["side_b"]) if s]
-            out[r["event"]] = Lens(r["lens"], ss, r["source"])
+            cc = (r.get("local_press") or "").strip()
+            out[r["event"]] = Lens(r["lens"], ss, r["source"], local_press(t, cc) if cc else None)
     return out
 
 

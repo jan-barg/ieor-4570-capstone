@@ -5,6 +5,10 @@
   2  core, reworded     news                         same                            reworded     20
   3  side A             news for US outlets,         side A's outlets                side query   10
   4  side B               general for the rest       side B's outlets                side query   10
+  4  local press        general (stories with one    the story's country's outlets   title, then  20 each
+                          set in the lens file)        (searched, never compared)      a query in
+                                                                                     the local
+                                                                                     language
   5  right tail         general (US lens only)       right outlets minus Fox/NY Post title        10
   6  Guardian           Guardian API                 theguardian.com                 title keywords;
                                                                                      reworded joined with OR  20 each,
@@ -35,6 +39,7 @@ from .sides import Lens, split_by_mode, us_sides
 # ~83% of the time, #4-5 ~50%, #8-10 ~28%, past #15 under 10%. Top 8 keeps 85% of the on-topic
 # Guardian articles and halves the pile (21 -> 11 per story).
 GUARDIAN_KEEP = 8
+LOCAL_MAX = 20      # the two side searches it replaces on a no-split story returned 10 each
 THIN = 5
 RETRY_WAIT_S = 30
 X_HOSTS = ("x.com/", "twitter.com/")
@@ -79,6 +84,19 @@ def build_searches(ev: Event, lens: Lens, qs: QuerySet, t: OutletTable,
             if topic == "general":
                 p["include_published_date"] = True
             out.append(Search(f"q3{tag}_side_{side.side_id}_{topic}", p))
+    if lens.local:
+        # The English title alone finds only local outlets' English pages (Krakow, Nov 24: 19 hits,
+        # 15 from the state broadcaster's English site, none of the Polish-language coverage), so a
+        # second search uses the query writer's local-language query when there is one.
+        lang_q = qs.sides.get(lens.local.side_id, "")
+        for topic, hosts in split_by_mode(t, lens.local):
+            for suffix, q in (("", qs.core), ("_lang", lang_q)):
+                if not q or (suffix and q.strip().lower() == qs.core.strip().lower()):
+                    continue
+                p = dict(base, topic=topic, query=q, include_domains=hosts, max_results=LOCAL_MAX)
+                if topic == "general":
+                    p["include_published_date"] = True
+                out.append(Search(f"q4_{lens.local.side_id}{suffix}_{topic}", p))
     if lens.kind == "us":
         tail = us_sides(t)["us_right_tail"]
         out.append(Search("q5_right_tail", dict(base, topic="general", include_published_date=True,

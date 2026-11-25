@@ -14,7 +14,7 @@ from .queries import QuerySet, model_queries, template_queries
 from .sides import Lens
 from .store import ArticleCache, write_story
 
-VERSION = "gather-1.1 (2026-11-24, Guardian top 8)"
+VERSION = "gather-1.2 (2026-11-24, local press for no-split stories)"
 
 
 def gather_event(ev: Event, lens: Lens, t: OutletTable, tv: Tavily, g: Guardian, *,
@@ -47,7 +47,9 @@ def gather_event(ev: Event, lens: Lens, t: OutletTable, tv: Tavily, g: Guardian,
         "window": {"start_date": ev.start.strftime("%Y-%m-%d"), "end_date": end_date},
         "lens": {"kind": lens.kind, "source": lens.source,
                  "sides": [{"side_id": s.side_id, "label": s.label, "outlet_ids": s.outlet_ids}
-                           for s in lens.sides]},
+                           for s in lens.sides],
+                 "local": ({"side_id": lens.local.side_id, "label": lens.local.label,
+                            "outlet_ids": lens.local.outlet_ids} if lens.local else None)},
         "queries": queries.as_dict(), "log": log, "dropped": dropped,
         "credits_this_run": credits, "seconds": round(time.time() - t0, 1),
         "counts": counts, "langfuse_trace_id": tid,

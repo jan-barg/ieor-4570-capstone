@@ -4,7 +4,9 @@ background query. The core query is always the event title.
 Two writers, same output:
   template_queries  code only: title keywords, title for the sides, entity words for background
   model_queries     one call to the query_writer model (config/models.toml), which can also write
-                    a side's query in that side's language (Portuguese for Brazilian outlets)
+                    a side's query in that side's language (Portuguese for Brazilian outlets).
+                    A story's local press (sides.local_press) gets a query the same way, saved
+                    under its id in `sides` (e.g. "local_pl"), though it is never a side.
 
 The queries used are saved with every story, so a frozen fixture shows exactly what was searched."""
 from __future__ import annotations
@@ -102,7 +104,8 @@ def _side_line(t: OutletTable, s) -> str:
 
 
 def model_queries(ev: Event, lens: Lens, t: OutletTable, trace_id=None, step="query_writer") -> QuerySet:
-    side_lines = "\n".join(_side_line(t, s) for s in lens.sides) or "(no sides: return \"sides\": {})"
+    groups = lens.sides + ([lens.local] if lens.local else [])
+    side_lines = "\n".join(_side_line(t, s) for s in groups) or "(no sides: return \"sides\": {})"
     event = (f"Event title: {ev.title}\nSummary: {ev.summary}\nCountry: {ev.country}\n"
              f"Started: {ev.start:%Y-%m-%d %H:%M} UTC\n\nSides:\n{side_lines}")
     msgs = [{"role": "user", "content": [models.cache_block(PROMPT), models.text_block(event)]}]
@@ -113,7 +116,7 @@ def model_queries(ev: Event, lens: Lens, t: OutletTable, trace_id=None, step="qu
     sides = data.get("sides") or {}
     qs = QuerySet(core=ev.title, reworded=str(data.get("reworded") or "").strip(),
                   background=str(data.get("background") or "").strip(),
-                  sides={s.side_id: str(sides.get(s.side_id) or ev.title).strip() for s in lens.sides},
+                  sides={s.side_id: str(sides.get(s.side_id) or ev.title).strip() for s in groups},
                   writer="model", model=r.model, cost_usd=r.cost["total"])
     fallback = template_queries(ev, lens)   # never search with an empty query
     qs.reworded = qs.reworded or fallback.reworded

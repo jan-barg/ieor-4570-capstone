@@ -35,6 +35,7 @@ Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project`
 | `scripts/smoke_models.py` | Checks every shortlisted model answers and reports cached tokens |
 | `scripts/freeze_fixtures.py` | Runs Gather on the 40 test stories, with a credit check and a hard cap |
 | `scripts/coverage_report.py` | Module 3's eval and module 1's proxy measures on the frozen stories |
+| `stringer/pick.py`, `scripts/pick_articles.py` | Picks the (at most) 10 balanced articles the later steps read; writes `picked.json` per story |
 
 ## Common commands
 
@@ -43,6 +44,8 @@ Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project`
 .venv/bin/python -m scripts.freeze_fixtures --dry-run          # plan and credit estimate, free
 .venv/bin/python -m scripts.freeze_fixtures --writer model     # the real run (cap: 400 credits)
 .venv/bin/python -m scripts.remerge_frozen                     # rebuild frozen stories with current code, free
+.venv/bin/python -m scripts.remerge_frozen --only <id> --new-searches   # also run searches added since (cap 30 credits)
+.venv/bin/python -m scripts.pick_articles                      # pick 10 balanced articles per frozen story, free
 .venv/bin/python -m scripts.coverage_report
 .venv/bin/python build/build_outlets.py --force                # rebuild outlets.csv from the seed
 ```

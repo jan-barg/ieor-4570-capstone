@@ -155,6 +155,58 @@ def test_no_divide_plan_has_no_side_searches(t):
         ["q1_core", "q2_reworded", "q9_background"]
 
 
+def test_no_divide_plan_searches_local_press(t):
+    ev = event()
+    local = sides.local_press(t, "PL")
+    lens = sides.Lens("none", [], local=local)
+    qs = qs_for(ev, lens)                       # template writer: no local-language query
+    ss = plan.build_searches(ev, lens, qs, t, None)
+    assert [s.qid for s in ss] == ["q1_core", "q2_reworded", "q4_local_pl_general", "q9_background"]
+    p = ss[2].params
+    assert p["topic"] == "general" and p["include_published_date"] and p["max_results"] == plan.LOCAL_MAX
+    assert p["query"] == qs.core
+    assert sorted(p["include_domains"]) == sorted(t.hosts(set(local.outlet_ids), kinds=None))
+    assert all(t.by_id[i].country == "PL" and t.by_id[i].kind in ("news", "wire") for i in local.outlet_ids)
+    assert sides.local_press(t, "XX") is None
+    # with a local-language query: a second search over the same outlets
+    qs.sides["local_pl"] = "Strzelanina w Krakowie, sprawca zatrzymany"
+    ss = plan.build_searches(ev, lens, qs, t, None)
+    assert [s.qid for s in ss][2:4] == ["q4_local_pl_general", "q4_local_pl_lang_general"]
+    assert ss[3].params["query"] == qs.sides["local_pl"] and ss[3].params["include_domains"] == p["include_domains"]
+    qs.sides["local_pl"] = ev.title.upper()     # same words as the title: no second search
+    assert "q4_local_pl_lang_general" not in [s.qid for s in plan.build_searches(ev, lens, qs, t, None)]
+
+
+def test_query_writer_writes_local_press_query_but_no_sides(t, monkeypatch):
+    from types import SimpleNamespace
+    seen = {}
+
+    def fake_complete(step, msgs, **kw):
+        seen["prompt"] = msgs[0]["content"][-1]["text"]
+        return SimpleNamespace(text=json.dumps({"reworded": "a b c d e", "background": "f g h i",
+                                                "sides": {"local_pl": "Strzelanina w Krakowie"}}),
+                               model="fake", cost={"total": 0.0001})
+    monkeypatch.setattr(queries.models, "complete", fake_complete)
+    lens = sides.Lens("none", [], local=sides.local_press(t, "PL"))
+    qs = queries.model_queries(event(), lens, t)
+    assert "local_pl" in seen["prompt"] and qs.sides == {"local_pl": "Strzelanina w Krakowie"}
+    assert lens.sides == []                      # the local press is never a side
+
+
+def test_fixture_lenses_read_local_press_column(tmp_path, monkeypatch, t):
+    from stringer import paths
+    f = tmp_path / "lenses.csv"
+    f.write_text("event,lens,side_a,side_b,source,local_press\n"
+                 "aaaaaaaa,none,,,1,PL\nbbbbbbbb,world,ukraine,russia,2,\ncccccccc,none,,,3,\n")
+    monkeypatch.setattr(paths, "FIXTURE_LENSES_CSV", f)
+    ls = sides.fixture_lenses(t)
+    assert ls["aaaaaaaa"].sides == [] and ls["aaaaaaaa"].local.side_id == "local_pl"
+    assert ls["bbbbbbbb"].local is None and len(ls["bbbbbbbb"].sides) == 2
+    assert ls["cccccccc"].local is None
+    f.write_text("event,lens,side_a,side_b,source\naaaaaaaa,none,,,1\n")   # older file, no column
+    assert sides.fixture_lenses(t)["aaaaaaaa"].local is None
+
+
 def test_template_queries_nonempty(t):
     ev = event()
     q = queries.template_queries(ev, lens_for(t, "world", "ukraine", "russia"))
