@@ -12,6 +12,10 @@ user_project_header = "agentic-ai-msds"
 [anthropic]
 keychain_item = "anthropic_api_key"
 
+[openrouter]
+# Added Nov 26 (Jan: "experiment with openrouter if there are viable alternatives"). Key name, looked up upper-case in .env.
+key_item = "openrouter_api_key"
+
 [langfuse]
 # Key names (looked up upper-case in .env); when they are missing, calls are still logged locally (stringer_private/runs/).
 public_key_item = "langfuse_public_key"
@@ -27,7 +31,7 @@ brief_onecall = "sonnet-5-5"             # module 5 baseline to beat: one call w
 brief_merge = "deepseek-v4.1-flash"      # module 5 step 2 (decided Nov 25, Jan: Sonnet and GLM cost too much; prompt to be tuned)
 brief_framing = "sonnet-5-5"             # module 5 step 4, how each side tells it (decided Nov 25, Jan: sharper points, 55 of 60 good vs DeepSeek 51; ~1.9 cents a story)
 brief_blind = "deepseek-v4.1-flash"      # module 5 step 3b: blindspot judge (Nov 25, same model as steps 1 and 2)
-fact_check = "sonnet-5-5"                # module 6 judge
+fact_check = "haiku-5-5"                 # module 6 judge (decided Nov 26, Jan: "haiku is good enough ... considering the cost and time"; check-5: 48 of 51 planted, 0.85% good claims lost, 1.4 cents a story)
 script = "sonnet-5-5"                    # module 7
 
 # ---- Models. shortlist = true: the smoke test checks it answers and reports cached tokens ----
@@ -99,3 +103,23 @@ output = 3.75
 cached_input = 0.075
 shortlist = true
 note = "404 from agentic-ai-msds on Nov 24 (global and us-central1), though it is in the model list"
+
+# ---- Added Nov 26 for the fact check (module 6): cheaper than Sonnet, stronger than Haiku on the
+# Artificial Analysis Intelligence Index (v5.0.2: Haiku 37, Sonnet 55, GPT-6.1 Terra 51; 3.8 Flash unscored).
+# Not on the smoke-test shortlist.
+
+[models."gemini-3.8-flash"]
+litellm = "vertex_ai/gemini-3.8-flash"
+provider = "vertex"
+input = 0.75                # Google's price as OpenRouter lists it on Nov 26 (marked as a sale)
+output = 3.75
+cached_input = 0.075
+note = "Nov 26: answers a free token count on agentic-ai-msds (global, v1beta1); 3.6 Flash still doesn't"
+
+[models."gpt-6.1-terra"]
+litellm = "openrouter/openai/gpt-6.1-terra"
+provider = "openrouter"
+input = 1.00                # OpenRouter's price, Nov 26 (prompts under 272k tokens)
+output = 5.00
+cached_input = 0.05
+cache_write = 1.25

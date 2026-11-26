@@ -10,7 +10,8 @@ uses, and every call is logged with tokens, cached tokens and cost (tracing.py).
 Prompt caching (settled Nov 24): order every repeated call as instructions -> examples ->
 (mark) -> event -> (mark) -> article. Mark a block with cache_block(text). The marks are sent to
 Claude (explicit caching); for Vertex models they are removed, since DeepSeek and GLM cache on
-their own and LiteLLM would otherwise turn a Gemini mark into a paid stored cache."""
+their own and LiteLLM would otherwise turn a Gemini mark into a paid stored cache. OpenRouter models
+(provider "openrouter", added Nov 26 for the fact check's model test) have them removed too."""
 from __future__ import annotations
 
 import copy
@@ -113,6 +114,11 @@ def call_kwargs(alias: str, messages: list[dict]) -> dict:
                   messages=_strip_cache_marks(messages))
     elif m["provider"] == "anthropic":
         kw.update(api_key=keys.get(config()["anthropic"]["keychain_item"]), messages=messages)
+    elif m["provider"] == "openrouter":
+        # Only hosts that honour every parameter (the JSON schema above all) and don't keep the data.
+        o = config().get("openrouter", {})
+        kw.update(api_key=keys.get(o.get("key_item", "openrouter_api_key")), messages=_strip_cache_marks(messages),
+                  extra_body={"provider": {"require_parameters": True, "data_collection": "deny"}})
     else:
         raise ValueError(f"unknown provider {m['provider']}")
     return kw

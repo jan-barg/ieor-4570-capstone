@@ -14,7 +14,7 @@ def test_every_step_names_a_configured_model():
     for step, alias in cfg["steps"].items():
         assert alias in cfg["models"], step
     for alias, m in cfg["models"].items():
-        assert m["provider"] in {"vertex", "anthropic"}, alias
+        assert m["provider"] in {"vertex", "anthropic", "openrouter"}, alias
         assert m["input"] > 0 and m["output"] > 0, alias
 
 

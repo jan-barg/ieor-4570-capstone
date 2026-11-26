@@ -5,7 +5,7 @@ from .runner import Step
 
 
 def names() -> list[str]:
-    return ["same_story", "brief_read", "brief_onecall", "brief_merge", "brief_sides", "brief_blind", "brief_framing", "claim_wording", "framing_judge"]
+    return ["same_story", "brief_read", "brief_onecall", "brief_merge", "brief_sides", "brief_blind", "brief_framing", "claim_wording", "framing_judge", "fact_check"]
 
 
 def get(name: str, **kw) -> Step:
@@ -36,4 +36,7 @@ def get(name: str, **kw) -> Step:
     if name == "framing_judge":
         from .framing_judge_eval import FramingJudgeEval
         return FramingJudgeEval(**kw)
+    if name == "fact_check":
+        from .fact_check_eval import FactCheckEval
+        return FactCheckEval(**kw)
     raise KeyError(f"no eval for step '{name}'; known: {', '.join(names())}")
