@@ -59,6 +59,29 @@ def from_archive_row(r: dict) -> Event:
                  created_at=r["created_at"], url=r["url"], source_urls=r["sources"].split())
 
 
+def from_dict(d: dict) -> Event:
+    """An Event from its saved form (Event.as_dict, as gather.json keeps it)."""
+    f = {k: d.get(k, "") for k in Event.__dataclass_fields__}
+    f["start"] = parse_ts(d["start"])
+    f["source_urls"] = list(d.get("source_urls") or [])
+    return Event(**f)
+
+
+def from_live(e: dict) -> Event:
+    """An Event from the live /v1/events feed (or a saved snapshot of it). The feed has no
+    first_reported_at; the first source's time is the same thing (the Archive shows they match), so
+    the start is the earliest source time, else created_at."""
+    srcs = e.get("sources") or []
+    urls = [s["url"] if isinstance(s, dict) else str(s) for s in srcs]
+    times = sorted(parse_ts(s.get("published_at")) for s in srcs if isinstance(s, dict) and s.get("published_at"))
+    start = times[0] if times else parse_ts(e.get("created_at"))
+    s = lambda k: "" if e.get(k) is None else str(e.get(k))
+    return Event(id=s("id"), title=s("title"), summary=s("summary"), category=s("category"), subtype=s("subtype"),
+                 severity=s("severity"), confidence=s("confidence"), country=s("country"),
+                 location_name=s("location_name"), lat=s("lat"), lng=s("lng"), report_count=s("report_count"),
+                 start=start, created_at=s("created_at"), url=s("url"), source_urls=urls)
+
+
 def load_archive(ids: set[str]) -> dict[str, Event]:
     """Events by full id or 8-character short id."""
     csv.field_size_limit(10 ** 9)

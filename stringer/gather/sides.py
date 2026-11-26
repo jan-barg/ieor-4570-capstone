@@ -8,7 +8,7 @@ A side that mixes both is split into two searches."""
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .. import paths
 from ..outlets import OutletTable
@@ -31,6 +31,9 @@ class Lens:
     sides: list[Side]
     source: str = ""
     local: Side | None = None   # one country's press: searched for coverage, never compared
+    reason: str = ""            # why these sides, or why no real split (module 4, stringer/lens.py)
+    flags: list[str] = field(default_factory=list)   # what code found when checking the sides
+    local_code: str = ""        # the local-press country code the step chose, even with no outlets on file
 
 
 def local_press(t: OutletTable, country: str) -> Side | None:
@@ -53,9 +56,9 @@ def us_sides(t: OutletTable) -> dict[str, Side]:
             "us_right_tail": Side("us_right_tail", "US right outlets except Fox and the NY Post", tail)}
 
 
-def side_lists(t: OutletTable) -> dict[str, Side]:
+def side_lists(t: OutletTable, path=None) -> dict[str, Side]:
     out = dict(us_sides(t))
-    with open(paths.SIDE_LISTS_CSV, newline="", encoding="utf-8") as f:
+    with open(path or paths.SIDE_LISTS_CSV, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             ids = [i for i in r["outlet_ids"].split(";") if i]
             missing = [i for i in ids if i not in t.by_id]

@@ -45,7 +45,7 @@ def gather_event(ev: Event, lens: Lens, t: OutletTable, tv: Tavily, g: Guardian,
         "event": ev.as_dict(), "attribution": ATTRIBUTION, "gather_version": VERSION,
         "gathered_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "window": {"start_date": ev.start.strftime("%Y-%m-%d"), "end_date": end_date},
-        "lens": {"kind": lens.kind, "source": lens.source,
+        "lens": {"kind": lens.kind, "source": lens.source, "reason": lens.reason, "flags": list(lens.flags),
                  "sides": [{"side_id": s.side_id, "label": s.label, "outlet_ids": s.outlet_ids}
                            for s in lens.sides],
                  "local": ({"side_id": lens.local.side_id, "label": lens.local.label,
