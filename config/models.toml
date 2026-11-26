@@ -22,9 +22,11 @@ host_item = "langfuse_host"          # optional; default https://cloud.langfuse.
 query_writer = "gemini-3.5-flash-lite"   # module 1: reworded, side and background queries
 same_story = "deepseek-v4.1-flash"       # module 2 (to be chosen by its eval)
 lens = "deepseek-v4.1-flash"             # module 4 (to be chosen by its eval)
-brief_read = "haiku-5-5"                 # module 5 step 1 (shortlist below)
-brief_merge = "sonnet-5-5"               # module 5 step 2
-brief_sides = "sonnet-5-5"               # module 5 step 4
+brief_read = "deepseek-v4.1-flash"       # module 5 step 1 (decided Nov 25, Jan, from the step 1 eval)
+brief_onecall = "sonnet-5-5"             # module 5 baseline to beat: one call writes the Story File
+brief_merge = "deepseek-v4.1-flash"      # module 5 step 2 (decided Nov 25, Jan: Sonnet and GLM cost too much; prompt to be tuned)
+brief_framing = "sonnet-5-5"             # module 5 step 4, how each side tells it (decided Nov 25, Jan: sharper points, 55 of 60 good vs DeepSeek 51; ~1.9 cents a story)
+brief_blind = "deepseek-v4.1-flash"      # module 5 step 3b: blindspot judge (Nov 25, same model as steps 1 and 2)
 fact_check = "sonnet-5-5"                # module 6 judge
 script = "sonnet-5-5"                    # module 7
 

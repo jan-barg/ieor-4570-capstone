@@ -201,24 +201,27 @@ class Ctx:
         return self.model.startswith(CODE_PREFIX)
 
     def complete(self, messages: list[dict], *, name: str | None = None, max_tokens: int | None = None,
-                 **params) -> CallResult:
-        if self.is_code:
-            raise RuntimeError(f"{self.model} is a plain-code baseline; it can't call a model")
+                 model: str | None = None, **params) -> CallResult:
+        """`model` overrides the run's model for this call (e.g. a fixed judge); it still goes
+        through the same cap, cache and stats."""
+        alias = model or self.model
+        if alias.startswith(CODE_PREFIX):
+            raise RuntimeError(f"{alias} is a plain-code baseline; it can't call a model")
         params = dict(params, max_tokens=max_tokens or DEFAULT_MAX_TOKENS)
-        litellm_model = models.spec(self.model)["litellm"]
+        litellm_model = models.spec(alias)["litellm"]
         key = call_key(litellm_model, messages, params)
         hit = self.cache.get(key) if self.cache else None
         if hit is not None:
             usage = hit["usage"]
-            r = CallResult(text=hit["text"], model=self.model, usage=usage,
-                           cost=models.cost_of(self.model, usage), latency_s=hit.get("latency_s", 0.0),
+            r = CallResult(text=hit["text"], model=alias, usage=usage,
+                           cost=models.cost_of(alias, usage), latency_s=hit.get("latency_s", 0.0),
                            cached=True)
             self.stats.cache_hits += 1
         else:
-            held = self.budget.hold(worst_case_usd(self.model, count_tokens(litellm_model, messages),
+            held = self.budget.hold(worst_case_usd(alias, count_tokens(litellm_model, messages),
                                                    params["max_tokens"]))
             try:
-                res = self.complete_fn(model=self.model, messages=messages, trace_id=self.trace_id,
+                res = self.complete_fn(model=alias, messages=messages, trace_id=self.trace_id,
                                        name=name or self.step_name,
                                        metadata={"eval_step": self.step_name,
                                                  "item": self.item.id if self.item else None},
@@ -229,8 +232,8 @@ class Ctx:
             self.budget.settle(held, res.cost["total"])
             if self.cache:
                 self.cache.put(key, dict(text=res.text, usage=res.usage, latency_s=res.latency_s,
-                                         litellm_model=litellm_model, alias=self.model))
-            r = CallResult(text=res.text, model=self.model, usage=res.usage, cost=res.cost,
+                                         litellm_model=litellm_model, alias=alias))
+            r = CallResult(text=res.text, model=alias, usage=res.usage, cost=res.cost,
                            latency_s=res.latency_s, cached=False)
             self.stats.spent_usd += res.cost["total"]
         self.stats.calls += 1
@@ -418,17 +421,18 @@ def estimate(step: Step, *, model: str | None = None, only=None, split="tune", o
              out_dir=None, cache: CallCache | None = None, items: list[Item] | None = None) -> dict:
     """What a run would cost, from step.plan(): input tokens counted, output guessed by the step
     (times output_factor, e.g. 3 for models that think before answering). Calls already in the
-    cache cost nothing new."""
+    cache cost nothing new. A planned call may name its own "model" (e.g. a fixed judge)."""
     alias = model or default_model(step)
     items = items if items is not None else step.load(only=only, split=split)
     if alias.startswith(CODE_PREFIX):
         return dict(model=alias, items=len(items), calls=0, cached_calls=0, est_usd=0.0, worst_usd=0.0)
     cache = cache or CallCache(Path(out_dir) / "cache" if out_dir else None)
-    m = models.spec(alias)
     calls = cached = tin = tout = 0
-    worst = 0.0
+    worst = est = 0.0
     for item in items:
         for c in step.plan(item, alias):
+            a = c.get("model") or alias
+            m = models.spec(a)
             params = dict(c.get("params") or {})
             params["max_tokens"] = params.get("max_tokens") or DEFAULT_MAX_TOKENS
             calls += 1
@@ -436,10 +440,11 @@ def estimate(step: Step, *, model: str | None = None, only=None, split="tune", o
                 cached += 1
                 continue
             n = count_tokens(m["litellm"], c["messages"])
+            out = int(c.get("expect_output", 500) * output_factor)
             tin += n
-            tout += int(c.get("expect_output", 500) * output_factor)
-            worst += worst_case_usd(alias, n, params["max_tokens"])
-    est = (tin * m["input"] + tout * m["output"]) / 1e6
+            tout += out
+            est += (n * m["input"] + out * m["output"]) / 1e6
+            worst += worst_case_usd(a, n, params["max_tokens"])
     return dict(model=alias, items=len(items), stories=len({i.story for i in items}), calls=calls,
                 cached_calls=cached, input_tokens=tin, output_tokens=tout, est_usd=round(est, 4),
                 worst_usd=round(worst, 4))

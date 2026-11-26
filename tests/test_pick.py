@@ -39,8 +39,24 @@ def test_thin_side_holds_the_other_side_back_and_is_flagged():
     r = pick.pick(arts, SIDES)
     assert groups(r) == {"A": 1, "B": 2, "other": 7}
     assert r["flags"] == ["thin side: left_x gave 1 of 4, so right_x was held to 2"]
+
+
+def test_empty_side_is_flagged_and_no_longer_holds_the_other_side_to_one():
     r = pick.pick([art(f"b{i}") for i in range(8)] + [art(f"o{i}") for i in range(10)], SIDES)
-    assert groups(r) == {"B": 1, "other": 9}
+    assert groups(r) == {"B": 3, "other": 7}
+    assert r["flags"] == ["empty side: left_x had no usable articles"]
+
+
+def test_empty_side_lets_the_other_side_fill_when_neutrals_run_out():
+    r = pick.pick([art(f"b{i}") for i in range(8)] + [art(f"o{i}") for i in range(2)], SIDES)
+    assert groups(r) == {"B": 8, "other": 2} and len(r["picked"]) == 10
+
+
+def test_both_sides_empty_falls_back_to_neutrals():
+    r = pick.pick([wire("w0")] + [art(f"o{i}") for i in range(4)], SIDES)
+    assert groups(r) == {"wire": 1, "other": 4}
+    assert r["flags"] == ["empty side: left_x had no usable articles",
+                          "empty side: right_x had no usable articles", "only 5 usable articles"]
 
 
 def test_sides_grow_in_pairs_only_when_neutrals_run_out():
@@ -50,14 +66,23 @@ def test_sides_grow_in_pairs_only_when_neutrals_run_out():
     assert len(r["picked"]) == 10 and g["other"] == 1 and abs(g["A"] - g["B"]) <= 1
 
 
-def test_one_per_outlet_and_no_near_copies():
+def test_one_per_outlet_and_no_wire_copies():
     same_outlet = [art("o1", 0), art("o1", 1)]
-    copy = art("o2", 0, title="Gunman kills six in city square shooting - Outlet Two")
-    copy2 = art("o3", 0, title="Gunman kills six in city square shooting | Outlet Three")
-    text_copy = art("o4", 0, text=copy["text"].replace("o2", "o4", 1))
-    r = pick.pick(same_outlet + [copy, copy2, text_copy], {"kind": "none", "sides": []})
-    assert [row["outlet"] for row in r["rows"]] == ["o1", "o2"]
-    assert r["flags"] == ["only 2 usable articles"]
+    first = art("o2", 0, title="Gunman kills six in city square shooting - Outlet Two")
+    same_title = art("o3", 0, title="Gunman kills six in city square shooting | Outlet Three")
+    text_copy = art("o4", 0, text=first["text"].replace("o2", "o4", 1))
+    r = pick.pick(same_outlet + [first, same_title, text_copy], {"kind": "none", "sides": []})
+    # a shared headline alone is not a copy; the same text under another outlet is
+    assert [row["outlet"] for row in r["rows"]] == ["o1", "o2", "o3"]
+    assert r["flags"] == ["only 3 usable articles"]
+
+
+def test_a_shared_site_menu_does_not_make_a_copy():
+    menu = "\n".join(f"* [Section {i} news and more]({i}.example)" for i in range(40))
+    a = art("o1", 0, text=menu + "\n" + art("o1")["text"])
+    b = art("o2", 0, text=menu + "\n" + art("o2")["text"])
+    assert not pick.is_copy(a, b)
+    assert pick.is_copy(a, art("o3", 0, text=a["text"] + " one more closing sentence here"))
 
 
 def test_unusable_articles_are_skipped():
@@ -76,7 +101,21 @@ def test_no_split_takes_local_press_first_then_wires():
 
 
 def test_cited_sources_and_multi_search_finds_rank_first():
-    arts = [art("o1", 0), art("o2", 1, found_by=["a", "b", "c"]), art("o3", 2, own_source=True),
-            art("o4", 3, role="unclear", own_source=True)]
+    arts = [art("o1", 0), art("o2", 1, found_by=["a", "b", "c"]), art("o3", 2, own_source=True)]
     r = pick.pick(arts, {"kind": "none", "sides": []}, n=3)
     assert [row["outlet"] for row in r["rows"]] == ["o3", "o2", "o1"]
+
+
+def test_undated_articles_rank_as_coverage_when_confirmed():
+    arts = [art("o1", 0, role="unclear"),                              # undated, unconfirmed: last
+            art("o2", 1), art("o3", 2, role="unclear", verdict="same"),  # same story per module 2
+            art("o4", 3, role="unclear", own_source=True)]             # cited by the event
+    r = pick.pick(arts, {"kind": "none", "sides": []}, n=4)
+    assert [row["outlet"] for row in r["rows"]] == ["o4", "o2", "o3", "o1"]
+
+
+def test_side_model_places_unlabeled_outlets_but_lists_come_first():
+    arts = [art("x1", side="left_x"), art("b0", side="left_x"), art("x2"), art("x3", side="other_lens")]
+    r = pick.pick(arts, SIDES)
+    assert {row["outlet"]: row["group"] for row in r["rows"]} == {"x1": "A", "b0": "B", "x2": "other",
+                                                                   "x3": "other"}

@@ -22,7 +22,8 @@ from .. import paths
 
 
 def call_key(litellm_model: str, messages: list[dict], params: dict | None = None) -> str:
-    blob = json.dumps({"model": litellm_model, "messages": messages, "params": params or {}},
+    params = {k: v for k, v in (params or {}).items() if k != "timeout"}     # a timeout doesn't change the answer
+    blob = json.dumps({"model": litellm_model, "messages": messages, "params": params},
                       sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
