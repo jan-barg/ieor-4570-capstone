@@ -1,0 +1,211 @@
+{
+  "version": "shots-2",
+  "about": "The shot catalog shared by the script writer (module 7) and the video step (module 8), settled Nov 26 (Jan: all as recommended). The writer picks one shot per beat and fills only that shot's blanks; every other blank stays empty (\"\" or []). Word marks in the narration look like [count 1,250 homes]: the mark's name, then the spoken words an animation follows. The writer aims at words_min to words_max and at most hook_words_max; a script is refused only below words_hard_min, above words_hard_max or with a hook above hook_words_hard_max (Jan, Nov 26: slightly over is fine; 115 words is fine when a story has little to say).",
+  "limits": {
+    "words_hard_min": 115,
+    "words_min": 135,
+    "words_max": 165,
+    "words_hard_max": 180,
+    "beats_min": 7,
+    "beats_max": 10,
+    "beat_words_max": 30,
+    "hook_words_max": 14,
+    "hook_words_hard_max": 18,
+    "title_words_max": 7,
+    "headline_words_max": 10,
+    "angle_chars_max": 80,
+    "words_per_second": 2.6
+  },
+  "tones": {
+    "serious": "calm and plain, like a public broadcaster; short sentences, no exclamation marks",
+    "casual": "friendly and conversational, like explaining it to a friend; contractions are fine; still no jokes about harm",
+    "high-energy": "brisk and punchy, short sentences and strong verbs that stay neutral; never hype, never exclamation marks about harm"
+  },
+  "shots": {
+    "hook": {
+      "use": "always the first beat: the most important checked fact, or the clash when that fact is disputed",
+      "blanks": {
+        "title": "the on-screen headline, at most 7 words, every name and number from the cited claims"
+      },
+      "marks": [],
+      "required_marks": []
+    },
+    "map_locate": {
+      "use": "where it happened: one place",
+      "blanks": {
+        "places": "exactly 1 place name, as the claims or the event's location name write it",
+        "place_kind": "point, province, country or sea",
+        "label": "a short on-screen label (optional)"
+      },
+      "marks": [
+        "place"
+      ],
+      "required_marks": []
+    },
+    "map_link": {
+      "use": "from A to B: a strike path, a bridge, a route, two countries",
+      "blanks": {
+        "places": "exactly 2 place names: from, then to",
+        "label": "a short on-screen label (optional)",
+        "prop": "a prop that travels the arc (optional)"
+      },
+      "marks": [
+        "link"
+      ],
+      "required_marks": [
+        "link"
+      ]
+    },
+    "map_spread": {
+      "use": "many places at once",
+      "blanks": {
+        "places": "2 to 8 place names",
+        "label": "the count label, for example \"6 cities\""
+      },
+      "marks": [
+        "count"
+      ],
+      "required_marks": []
+    },
+    "quote": {
+      "use": "one person's exact words",
+      "blanks": {
+        "card": "the Q label of a quote from the quote list",
+        "speaker": "the person's name",
+        "role": "their role, a few words"
+      },
+      "marks": [
+        "quote"
+      ],
+      "required_marks": [
+        "quote"
+      ]
+    },
+    "claim_vs_claim": {
+      "use": "two accounts that disagree, each with who says it",
+      "blanks": {
+        "accounts": "exactly 2: who, what they say in at most 6 words, the claim id"
+      },
+      "marks": [
+        "left",
+        "right"
+      ],
+      "required_marks": [
+        "left",
+        "right"
+      ]
+    },
+    "big_number": {
+      "use": "one number that matters",
+      "blanks": {
+        "value": "the number as the claim writes it",
+        "unit": "what is counted",
+        "label": "who says it or what it means, a few words",
+        "compare_value": "a second number to compare (optional)",
+        "compare_label": "what the second number is (optional)"
+      },
+      "marks": [
+        "count",
+        "compare"
+      ],
+      "required_marks": [
+        "count"
+      ]
+    },
+    "tally": {
+      "use": "votes, seats, results",
+      "blanks": {
+        "rows": "2 to 6 rows of label and value",
+        "total": "the total or the threshold (optional)"
+      },
+      "marks": [
+        "count"
+      ],
+      "required_marks": []
+    },
+    "document": {
+      "use": "a ruling, law, sanction or order",
+      "blanks": {
+        "doc_kind": "ruling, law, sanction, order, report or other",
+        "title": "the document's name",
+        "issued_by": "who issued it",
+        "outcome": "the stamp, at most 3 words"
+      },
+      "marks": [
+        "stamp"
+      ],
+      "required_marks": []
+    },
+    "timeline": {
+      "use": "what happened in what order",
+      "blanks": {
+        "steps": "2 to 4 steps: when (optional) and what"
+      },
+      "marks": [
+        "step"
+      ],
+      "required_marks": [
+        "step"
+      ]
+    },
+    "sides": {
+      "use": "how each side tells it: second to last, only in two-sided stories",
+      "blanks": {
+        "points": "the side point ids, one or two per side"
+      },
+      "marks": [
+        "sideA",
+        "sideB"
+      ],
+      "required_marks": [
+        "sideA"
+      ]
+    },
+    "sources": {
+      "use": "always the last beat: code draws the card (balance bar, outlets, credits, AI mark)",
+      "blanks": {},
+      "marks": [],
+      "required_marks": []
+    },
+    "headline": {
+      "use": "a plain line, or the fallback when no other shot fits",
+      "blanks": {
+        "title": "the card's text, at most 10 words, every name and number from the cited claims"
+      },
+      "marks": [],
+      "required_marks": []
+    }
+  },
+  "broll": {
+    "kinds": [
+      "none",
+      "portrait",
+      "prop"
+    ],
+    "portrait": "a public figure's name, written as in the claims; the video step skips it when it has no portrait",
+    "props": [
+      "drone",
+      "missile",
+      "warship",
+      "cargo ship",
+      "tanker",
+      "plane",
+      "train",
+      "truck",
+      "bridge",
+      "gavel",
+      "ballot box",
+      "document",
+      "podium",
+      "handshake",
+      "flag",
+      "oil barrel",
+      "coins",
+      "factory",
+      "satellite",
+      "computer chip",
+      "virus"
+    ],
+    "rule": "B-roll shows the place, the people and the kind of thing, never the event itself. No victims or injuries."
+  }
+}

@@ -32,7 +32,10 @@ brief_merge = "deepseek-v4.1-flash"      # module 5 step 2 (decided Nov 25, Jan:
 brief_framing = "sonnet-5-5"             # module 5 step 4, how each side tells it (decided Nov 25, Jan: sharper points, 55 of 60 good vs DeepSeek 51; ~1.9 cents a story)
 brief_blind = "deepseek-v4.1-flash"      # module 5 step 3b: blindspot judge (Nov 25, same model as steps 1 and 2)
 fact_check = "haiku-5-5"                 # module 6 judge (decided Nov 26, Jan: "haiku is good enough ... considering the cost and time"; check-5: 48 of 51 planted, 0.85% good claims lost, 1.4 cents a story)
-script = "sonnet-5-5"                    # module 7
+script = "gpt-6.1-terra"                 # module 7 writer (decided Nov 26, Jan: "Yes, use Terra"; model selection: 37% clean first drafts vs Haiku 19%, 3.8 cents and 75 s a story)
+script_line_check = "haiku-5-5"         # module 7 line check: the fact check's model (decided Nov 26, Jan: all as recommended)
+script_words = "gemini-3.5-flash-lite"  # module 7 loaded-words check: wording-1's judge (Nov 26, same)
+voice_direction = "haiku-5-5"            # module 8 voice director (Jan, Nov 26: "v4 turbo with expressive tags"; ~0.07 cents a story)
 
 # ---- Models. shortlist = true: the smoke test checks it answers and reports cached tokens ----
 
