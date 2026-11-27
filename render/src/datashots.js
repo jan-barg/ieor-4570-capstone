@@ -175,14 +175,17 @@ export function drawQuote(ctx, s) {
   const head = bl.role ? 34 : 20;
   const bottom = bottomFor(ctx, beat);
   const room = bottom - TOP - 14 - head - 62 - (q.translated_from ? 16 : 0);
-  const {size, lines} = fitBox(ctx, full, {maxWidth: W_TEXT, maxHeight: Math.min(170, room), max: 32, min: 16, lh: 1.26});
+  // a cutout portrait stands below the words (Jan's pick, Nov 27), so they start at the top and keep to a smaller box
+  const standing = !!(beat.broll?.portrait?.cutoutSrc && beat.broll?.portrait?.face);
+  const {size, lines} = fitBox(ctx, full, {maxWidth: W_TEXT, maxHeight: standing ? Math.min(96, room) : Math.min(170, room),
+    max: standing ? 26 : 32, min: 16, lh: 1.26});
   const h = head + 62 + lines.length * size * 1.26 + (q.translated_from ? 16 : 0);
-  const y0 = centred(h, bottom) + 14;
+  const y0 = standing ? TOP + 10 : centred(h, bottom) + 14;
   s.portraitAt = [L.right - 26, y0 + 2];
   ctx.globalAlpha = clamp01(t / 8);
   ctx.font = `600 16px ${SANS}`;
   ctx.fillStyle = PAL.ink;
-  const nameW = beat.broll?.portrait?.src ? L.right - L.left - 62 : L.right - L.left;   // clear of the portrait
+  const nameW = beat.broll?.portrait?.src && !standing ? L.right - L.left - 62 : L.right - L.left;   // clear of the badge
   ctx.fillText(bl.speaker || q.speaker || '', L.left, y0, nameW);
   if (bl.role) {
     ctx.font = `500 11.5px ${SANS}`;

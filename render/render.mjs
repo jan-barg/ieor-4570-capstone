@@ -5,7 +5,7 @@
 //   node render.mjs stills <plan.json> <run folder> <out folder> [--frames 10,200|auto]
 //   node render.mjs bundle                                     (bundle once, into .bundle/)
 //
-// <run folder> holds the plan's audio files (narration.mp3, the music bed). They and the beats' portrait photos
+// <run folder> holds the plan's audio files (narration.mp3, the music bed). They and the beats' portrait photos (and cutouts)
 // are copied next to the bundle into a folder of this render's own (public/run-<id>/, removed afterwards), so
 // two renders at once never touch each other's files. Prints one JSON line at the end.
 //
@@ -100,7 +100,13 @@ function stage(serveUrl, plan, runDir, withAudio) {
     if (!fs.existsSync(pt.file)) throw new Error(`portrait file missing: ${pt.file}`);
     const name = path.basename(pt.file);
     fs.copyFileSync(pt.file, path.join(dest, 'portraits', name));
-    return {...b, broll: {...b.broll, portrait: {...pt, src: `${base}/portraits/${name}`}}};
+    const cut = {};
+    if (pt.cutout && fs.existsSync(pt.cutout)) {
+      const cname = `cut-${path.basename(pt.cutout)}`;
+      fs.copyFileSync(pt.cutout, path.join(dest, 'portraits', cname));
+      cut.cutoutSrc = `${base}/portraits/${cname}`;
+    }
+    return {...b, broll: {...b.broll, portrait: {...pt, ...cut, src: `${base}/portraits/${name}`}}};
   });
   return {base, dest, plan: {...plan, beats, audio: {...plan.audio, ...audio}}};
 }

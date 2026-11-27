@@ -7,6 +7,7 @@ import {
   makeCanvas, once, paperLayer, pill, rng, smallCaps, spokenChars, wrap, wrapCaps,
 } from './style.js';
 import {mapLayer, pin, projectionFor} from './map.js';
+import {hasCutout, stickerBand} from './placement.js';
 
 // ---- marks on every frame ------------------------------------------------------------------------------
 
@@ -157,9 +158,13 @@ export function drawHeadline(ctx, s) {
   ctx.drawImage(posterLayer(), 0, 0);
   ctx.save();
   ctx.scale(K, K);
-  // fit the title above the red bar, the "Source:" label and (when there is one) the prop's badge
+  // fit the title above the red bar, the "Source:" label and (when there is one) the prop's badge. With a cutout
+  // portrait the bar stays high enough to leave the sticker its band above the captions (a long title gets smaller
+  // type rather than lose the person; Nov 27).
   const prop = beat.broll?.kind === 'prop' && !beat.broll?.skipped;
-  const room = L.bottom - chipHeight(ctx, beat.label) - (prop ? 70 : 0) - 34 - (L.content + 20);
+  const room = hasCutout(beat)
+    ? L.captionTop - stickerBand() - 3 - 22 + 6 - (L.content + 20)
+    : L.bottom - chipHeight(ctx, beat.label) - (prop ? 70 : 0) - 34 - (L.content + 20);
   const {size, lines} = fitBox(ctx, title, {maxWidth: L.right - L.left, maxHeight: room, max: 54, min: 24, lh: 1.04});
   const lh = size * 1.04;
   const y0 = L.content + 20 + size * 0.8;

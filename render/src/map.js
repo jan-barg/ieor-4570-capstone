@@ -6,6 +6,7 @@ import {feature} from 'topojson-client';
 import land50Topo from 'world-atlas/land-50m.json';
 import land10Topo from 'world-atlas/land-10m.json';
 import {H, K, L, PAL, PX_H, PX_W, SANS, W, ctx2d, makeCanvas, once, paintGrain, rng, smallCaps} from './style.js';
+import {recordTexts} from './placement.js';
 
 // Some polygons in land-10m are wound the wrong way, so d3 reads them as "the whole globe except this
 // island" and fills the sea. Any polygon covering more than half the globe gets its rings reversed.
@@ -187,6 +188,7 @@ function buildLayer(frame, top, region, context, pins) {
   const proj = projectionFor(frame, top);
   const c = makeCanvas();
   const ctx = ctx2d(c);
+  recordTexts(c, ctx);           // its place names, so a portrait can keep clear of them (placement.js)
   paintGrain(ctx, 7, (y) => (y < top * K ? 0.5 * Math.pow(1 - y / (top * K), 1.15) + 0.04 : 0));
   const land = landFor(frame);
   const lakes = context?.lakes || [];

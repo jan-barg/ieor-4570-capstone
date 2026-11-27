@@ -287,7 +287,10 @@ def layout_detail(run: dict) -> str:
         return '<p class="muted">Not run this time.</p>'
     kinds = Counter(p["kind"] for p in lp)
     words = {"small": "text under 24 px", "low contrast": "contrast under 4.5:1 (3:1 for large text)",
-             "outside safe area": "outside the safe area", "overlap": "two texts overlapping", "cut off": "cut off at the frame's edge"}
+             "outside safe area": "outside the safe area", "overlap": "two texts overlapping", "cut off": "cut off at the frame's edge",
+             "face over text": "a portrait's face over words", "face under captions": "a portrait's face under the captions",
+             "portrait left out": "a person left out (no room for their portrait)",
+             "face outside safe area": "a portrait's face under TikTok's bar or buttons"}
     bars = hbars([(words.get(k, k), v, f"{v} texts: {words.get(k, k)}") for k, v in kinds.items()], "")
     texts = Counter((p["kind"], p["text"].split(" at ")[0]) for p in lp)
     top = "".join(f'<tr><td>{esc(words.get(k, k))}</td><td>{esc(t)}</td><td class="n">{v}</td></tr>'

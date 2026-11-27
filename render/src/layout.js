@@ -5,9 +5,12 @@
 //   - inside the frame (nothing cut off);
 //   - at least the minimum size;
 //   - contrast of at least 4.5:1 against what is behind it (3:1 for large text, as WCAG allows);
-//   - no two different texts overlapping.
+//   - no two different texts overlapping;
+//   - a cutout portrait's face over no words (map labels included), not under the captions and not under
+//     TikTok's top bar or right-hand buttons (Nov 27).
 // The findings go to the browser console as one "LAYOUT {...}" line per frame; render.mjs collects them.
-import {PX_H, PX_W} from './style.js';
+import {K, L, PX_H, PX_W} from './style.js';
+import {hasCutout} from './placement.js';
 
 export const SAFE = {left: 60, top: 150, right: 960, bottom: 1440};   // output pixels on the 1080 x 1920 frame
 export const MIN_PX = 24;
@@ -61,7 +64,17 @@ function behind(ctx, b) {
 export function layoutProbe(ctx) {
   const texts = [];
   let lastStroke = null;
-  const fill = ctx.fillText, stroke = ctx.strokeText;
+  const fill = ctx.fillText, stroke = ctx.strokeText, image = ctx.drawImage;
+  const layerTexts = [];          // words on a reused layer (the map's place names), for the portrait check only
+  ctx.drawImage = function (img, ...a) {
+    if (img && img.texts && a.length === 2) {
+      const t = ctx.getTransform();
+      for (const [x0, y0, x1, y1] of img.texts) {
+        layerTexts.push({x0: t.a * (a[0] + x0) + t.e, y0: t.d * (a[1] + y0) + t.f, x1: t.a * (a[0] + x1) + t.e, y1: t.d * (a[1] + y1) + t.f});
+      }
+    }
+    return image.call(ctx, img, ...a);
+  };
   ctx.strokeText = function (text, x, y, maxWidth) {
     lastStroke = {text: String(text), x, y, color: parseColor(ctx.strokeStyle), alpha: ctx.globalAlpha};
     return maxWidth === undefined ? stroke.call(ctx, text, x, y) : stroke.call(ctx, text, x, y, maxWidth);
@@ -83,9 +96,10 @@ export function layoutProbe(ctx) {
     return maxWidth === undefined ? fill.call(ctx, text, x, y) : fill.call(ctx, text, x, y, maxWidth);
   };
   return {
-    report(beat, frame) {
+    report(beat, frame, st) {
       ctx.fillText = fill;
       ctx.strokeText = stroke;
+      ctx.drawImage = image;
       // letters drawn one by one (small caps, decoding text) are joined back into their line
       const lines = [];
       for (const t of texts) {
@@ -115,6 +129,18 @@ export function layoutProbe(ctx) {
           const small = Math.min((a.x1 - a.x0) * (a.y1 - a.y0), (b.x1 - b.x0) * (b.y1 - b.y0));
           if (small > 0 && (w * h) / small > OVERLAP) problems.push({kind: 'overlap', text: `${where(a)} / ${where(b)}`});
         }
+      }
+      const pd = st?.portraitDrawn;
+      if (pd) {
+        const [fx0, fy0, fx1, fy1] = pd.face.map((v) => v * K);
+        const hit = (b) => fx0 < b.x1 && fx1 > b.x0 && fy0 < b.y1 && fy1 > b.y0;
+        for (const t of lines) if (hit(t)) problems.push({kind: 'face over text', text: where(t)});
+        for (const b of layerTexts) if (hit(b)) problems.push({kind: 'face over text', text: `map label at ${Math.round(b.x0)},${Math.round(b.y0)}`});
+        if (fy1 > L.captionTop * K) problems.push({kind: 'face under captions', text: `face bottom at ${Math.round(fy1)}`});
+        if (fy0 < SAFE.top || fx1 > L.right * K) problems.push({kind: 'face outside safe area', text: `face at ${Math.round(fx0)},${Math.round(fy0)}`});
+      } else if (st && hasCutout(beat)) {
+        // the person has a cutout but no room was found, so they are missing from the beat (Nov 27: seven headlines)
+        problems.push({kind: 'portrait left out', text: beat.broll.name || ''});
       }
       console.log(`LAYOUT ${JSON.stringify({beat: beat.n, shot: beat.shot, frame, texts: lines.length,
         smallest: Math.round(Math.min(...lines.map((t) => t.size), 999)), problems})}`);

@@ -392,6 +392,62 @@ def test_only_approved_portraits_whose_photo_exists(tmp_path):
     assert people.portrait("Ivo Brand", folder) is None and people.portrait("Mara Sund", folder) is None
 
 
+
+def test_a_cutout_on_disk_makes_a_cutout_portrait_with_its_face_box(tmp_path):
+    folder = tmp_path / "people"
+    (folder / "photos").mkdir(parents=True)
+    (folder / "cutouts").mkdir()
+    for f in ("photos/petrel.jpg", "photos/brand.jpg", "photos/sund.jpg", "cutouts/petrel.png"):
+        (folder / f).write_bytes(b"img")
+    (folder / "people.json").write_text(json.dumps({"version": "people-2", "people": [
+        dict(name="Ana Petrel", file="photos/petrel.jpg", author="A. Photographer", license="CC BY 4.0", approved=True,
+             cutout="cutouts/petrel.png", face=[0.2, 0.1, 0.7, 0.55]),
+        dict(name="Ivo Brand", file="photos/brand.jpg", author="B. Lens", license="CC0", approved=True,
+             cutout="cutouts/brand.png", face=[0.2, 0.1, 0.7, 0.55]),                 # cutout missing on disk
+        dict(name="Mara Sund", file="photos/sund.jpg", author="C. Shutter", license="CC0", approved=True,
+             cutout="cutouts/petrel.png", face=[0.2, 0.1])]}))                        # broken face box
+    people._load.cache_clear()
+    p = people.portrait("Ana Petrel", folder)
+    assert p["cutout"] == str(folder / "cutouts/petrel.png") and p["face"] == [0.2, 0.1, 0.7, 0.55]
+    assert p["credit"] == "Portrait of Ana Petrel cut out from a photo by A. Photographer, CC BY 4.0"
+    for name in ("Ivo Brand", "Mara Sund"):           # no usable cutout: the dotted badge, credited as redrawn
+        q = people.portrait(name, folder)
+        assert "cutout" not in q and "face" not in q and " redrawn from a photo by " in q["credit"]
+    people._load.cache_clear()
+
+
+def _cut_script():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cut_portraits", paths.CODE / "scripts" / "cut_portraits.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_cutter_results_go_into_people_json_and_a_stale_cutout_is_dropped():
+    doc = {"version": "people-1", "people": [
+        dict(name="Ana Petrel", file="photos/ana-petrel.jpg", approved=True),
+        dict(name="Ivo Brand", file="photos/ivo-brand.png", approved=True, cutout="cutouts/ivo-brand.png", face=[0, 0, 1, 1]),
+        dict(name="Mara Sund", file="photos/mara-sund.jpg", approved=False)]}
+    results = [{"file": "ana-petrel", "w": 600, "h": 800, "face": [0.21234, 0.1, 0.7, 0.5]},
+               {"file": "ivo-brand", "error": "no person found"},
+               {"file": "mara-sund", "w": 600, "h": 800}]                                 # no face found
+    new = _cut_script().merge(doc, results)
+    rows = {p["name"]: p for p in new["people"]}
+    assert new["version"] == "people-2" and doc["version"] == "people-1"                  # the input is not changed
+    assert rows["Ana Petrel"]["cutout"] == "cutouts/ana-petrel.png" and rows["Ana Petrel"]["face"] == [0.212, 0.1, 0.7, 0.5]
+    assert "cutout" not in rows["Ivo Brand"] and "face" not in rows["Ivo Brand"]          # failed now: old file not used
+    assert "cutout" not in rows["Mara Sund"] and rows["Mara Sund"]["approved"] is False
+
+
+def test_the_renderer_draws_cutouts_by_the_shot_jan_picked():
+    js = (paths.CODE / "render" / "src" / "portraits.js").read_text(encoding="utf-8")
+    assert "export const STANDING = new Set(['quote']);" in js          # standing on quotes, a sticker elsewhere
+    lay = (paths.CODE / "render" / "src" / "layout.js").read_text(encoding="utf-8")
+    assert all(k in lay for k in ("'face over text'", "'face under captions'", "'face outside safe area'", "'portrait left out'"))
+    cards = (paths.CODE / "render" / "src" / "cards.js").read_text(encoding="utf-8")
+    assert "hasCutout(beat)" in cards and "stickerBand()" in cards      # a headline keeps room for the person's sticker
+
 # ---- step 4: the render plan ---------------------------------------------------------------------------
 
 def built(tmp_path, geo, s=None, beats=None):
@@ -534,13 +590,16 @@ def test_an_approved_portrait_reaches_the_plan_and_the_credits(tmp_path, geo, mo
     people._load.cache_clear()
     name = next(b for b in built(tmp_path, geo)[0]["beats"] if b["shot"] == "quote")["broll"]["name"]
     (folder / "face.png").write_bytes(b"png")
-    (folder / "people.json").write_text(json.dumps({"version": "people-1", "people": [
-        dict(name=name, file="face.png", author="A. Photographer", license="CC BY 4.0", approved=True)]}))
+    (folder / "cut.png").write_bytes(b"png")
+    (folder / "people.json").write_text(json.dumps({"version": "people-2", "people": [
+        dict(name=name, file="face.png", author="A. Photographer", license="CC BY 4.0", approved=True,
+             cutout="cut.png", face=[0.25, 0.1, 0.75, 0.5])]}))
     people._load.cache_clear()
     pl, _ = built(tmp_path, geo)
     q = next(b for b in pl["beats"] if b["shot"] == "quote")
     assert q["broll"]["portrait"]["file"] == str(folder / "face.png") and "skipped" not in q["broll"]
-    assert any("A. Photographer" in c and "CC BY 4.0" in c for c in pl["sources_card"]["credits"])
+    assert q["broll"]["portrait"]["cutout"] == str(folder / "cut.png") and q["broll"]["portrait"]["face"] == [0.25, 0.1, 0.75, 0.5]
+    assert any("cut out from a photo by A. Photographer" in c and "CC BY 4.0" in c for c in pl["sources_card"]["credits"])
     people._load.cache_clear()
 
 

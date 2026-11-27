@@ -3,10 +3,11 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {AbsoluteFill, Audio, Sequence, continueRender, delayRender, interpolate, staticFile, useCurrentFrame} from 'remotion';
 import {K, L, PAL, PX_H, PX_W, SANS, fontsLoaded, paperLayer, smallCaps} from './style.js';
-import {aiMark, drawHeadline, drawHook, drawSides, drawSources} from './cards.js';
+import {aiMark, drawHeadline, drawHook, drawSides, drawSources, illustrationTag} from './cards.js';
 import {drawMap} from './mapshots.js';
 import {drawBroll} from './props.js';
 import {loadPortrait} from './portraits.js';
+import {finishedLayout} from './placement.js';
 import {layoutProbe} from './layout.js';
 import {drawBigNumber, drawClaims, drawDocument, drawQuote, drawTally, drawTimeline} from './datashots.js';
 
@@ -46,7 +47,8 @@ function Shot({beat, plan, from}) {
     const src = beat.broll?.portrait?.src;
     // a portrait that fails to load is left out (drawBroll finds no image), never a stalled render
     const photo = src ? loadPortrait(staticFile(src)).catch(() => null) : null;
-    Promise.all([fontsLoaded, photo]).then(() => setReady(true));
+    const cut = beat.broll?.portrait?.cutoutSrc ? loadPortrait(staticFile(beat.broll.portrait.cutoutSrc)).catch(() => null) : null;
+    Promise.all([fontsLoaded, photo, cut]).then(() => setReady(true));
   }, [beat]);
   useLayoutEffect(() => {
     if (!ready || !ref.current) return;
@@ -54,10 +56,16 @@ function Shot({beat, plan, from}) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, PX_W, PX_H);
     const st = {beat, t: frame, frame: from + frame, plan};
+    // a cutout portrait needs to know where the finished beat's words will be (placement.js)
+    if (beat.broll?.portrait?.cutoutSrc) {
+      st.finished = finishedLayout(beat, plan, SHOTS[beat.shot] || drawNotYet, (c) => {
+        if (beat.illustration) { c.save(); c.scale(K, K); illustrationTag(c, true); c.restore(); }
+      });
+    }
     const probe = plan.debug_layout ? layoutProbe(ctx) : null;      // eval 7 only (layout.js)
     (SHOTS[beat.shot] || drawNotYet)(ctx, st);
     drawBroll(ctx, st);
-    if (probe) probe.report(beat, from + frame);
+    if (probe) probe.report(beat, from + frame, st);
     if (!released.current) {
       released.current = true;
       continueRender(handle);

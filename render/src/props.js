@@ -5,7 +5,7 @@
 // marks as an illustration.
 import {K, L, PAL, clamp01, ctx2d, easeOut, makeCanvas, once, rng} from './style.js';
 import {chipHeight, illustrationTag} from './cards.js';
-import {portraitBadge, portraitImage} from './portraits.js';
+import {drawCutout, portraitBadge, portraitImage} from './portraits.js';
 import {staticFile} from 'remotion';
 
 const INK = PAL.ink, COB = PAL.cobalt, MUS = PAL.mustard, VER = PAL.vermilion, PAP = PAL.paper;
@@ -149,6 +149,8 @@ const badge = (name, r) => once(`prop-${name}-${r}`, () => {
 const DARK = new Set(['hook', 'map_locate', 'map_link', 'map_spread', 'headline']);
 
 // Draws the beat's prop or portrait (if it has one we can draw) and the "Illustration" tag (if the plan says so).
+// A portrait with a cutout is drawn by drawCutout where placement.js finds room (s.portraitDrawn says where, for
+// the layout check); with no room it is left out rather than put over words. Without a cutout: the dotted badge.
 export function drawBroll(ctx, s) {
   const {beat, t} = s;
   const br = beat.broll || {};
@@ -158,7 +160,11 @@ export function drawBroll(ctx, s) {
   const name = br.kind === 'prop' && DRAW[br.name] && !(beat.shot === 'document' && br.name === 'document') ? br.name : null;
   const url = br.kind === 'portrait' && br.portrait?.src ? staticFile(br.portrait.src) : null;
   const photo = url ? portraitImage(url) : null;
-  if (name || photo) {
+  const cutUrl = br.kind === 'portrait' && br.portrait?.cutoutSrc && br.portrait?.face ? staticFile(br.portrait.cutoutSrc) : null;
+  const cut = cutUrl ? portraitImage(cutUrl) : null;
+  if (cut && s.finished) {
+    s.portraitDrawn = drawCutout(ctx, s, cutUrl, cut);
+  } else if (name || photo) {
     const r = photo && s.portraitAt ? 26 : 30;
     const low = L.bottom - chipHeight(ctx, beat.label) - r - 22;
     // the corner farthest from anything the shot asked to keep clear (a map's pins and their labels);
