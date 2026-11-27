@@ -23,7 +23,7 @@ secret_key_item = "langfuse_secret_key"
 host_item = "langfuse_host"          # optional; default https://cloud.langfuse.com
 
 [steps]
-gate_policy = "haiku-5-5"                # module 0 content check (the child-victim rule), prompt child-2; chosen by its eval (Jan, Nov 26)
+gate_policy = "haiku-5-5"                # module 0 content check (the child-victim rule), prompt child-4 (Jan's narrower rule); chosen by its eval (Jan, Nov 26)
 query_writer = "gemini-3.5-flash-lite"   # module 1: reworded, side and background queries
 same_story = "deepseek-v4.1-flash"       # module 2 (to be chosen by its eval)
 lens = "haiku-5-5"                       # module 4, choosing the sides (decided Nov 26, Jan, from its eval: prompt lens-3, 36 of 40 cold, 39 of 40 menu; ~0.06 cents a story)

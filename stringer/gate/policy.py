@@ -1,8 +1,10 @@
-"""The Gate's content check: is this a story we make? (module 0; rule settled Nov 23, map module 0).
+"""The Gate's content check: is this a story we make? (module 0; rule settled Nov 23, narrowed Nov 26).
 
-The rule: refuse an event when a child is its central subject as a victim (hurt, killed or put in
-danger). Allowed: a minor as perpetrator or suspect; larger events where children are among the
-victims; disasters and accidents, even when most of the dead are children.
+The rule (child-4, Jan Nov 26: "Yes, narrower rule"): refuse an event when a young child (under 13) is
+killed or badly hurt by someone's violence or abuse and the story is about that child. Allowed: teenagers;
+children who come out unhurt; illness, neglect and accidents; a minor as perpetrator or suspect; larger
+events where children are among the victims; disasters; trials and inquiries about past killings.
+(The Nov 23 rule also refused teens and children put in danger; Jan's label review narrowed it.)
 
 How (decided Nov 26, Jan, decisions page items 1 and 4):
   1. One small model call reads the event's title, summary, category and country. The answer format
@@ -14,7 +16,7 @@ How (decided Nov 26, Jan, decisions page items 1 and 4):
      once per event and again only when the title or summary changes.
 
 Example: "Teen Arrested After Shooting at School" -> allow (child_role perpetrator_or_suspect); "Drone
-Strike Kills Boy, 7" -> refuse (victim_central).
+Strike Kills Boy, 7" -> refuse (victim_central); "Sixteen-year-old hurt in knife attack" -> allow (a teen).
 
 `complete(messages, name=..., **params)` returns an object with .text, the same shape as the eval
 runner's ctx.complete; live_complete() wraps models.complete for the site."""
@@ -28,7 +30,7 @@ from dataclasses import asdict, dataclass, field
 from .. import models
 from .rules import field as ev_field
 
-VERSION = "child-2"         # the default since Nov 26 (eval: no misses on tune or holdout with Haiku)
+VERSION = "child-4"         # the default since Nov 26 (Jan's narrower rule; eval: 3 of 3 refusals, 1 open call)
 MAX_TOKENS = 8000           # thinking counts toward this on some models; the answer itself is ~120 tokens
 CALL_TIMEOUT_S = 120
 VERDICTS = ("allow", "refuse")
@@ -82,7 +84,51 @@ PROMPT_CHILD2 = PROMPT_CHILD1.replace(
     "people were shot or attacked (for example in the car or the room), refuse, even if the child was not hurt.\n"
     "- When the headline itself makes a child victim the news")
 
-PROMPTS = {"child-1": PROMPT_CHILD1, "child-2": PROMPT_CHILD2}
+# child-3 (Nov 26, Jan: "Yes, narrower rule"): after Jan's label review ("teens are not kids", "kid is safe",
+# "not killed", "sad but not violent attack"), the rule covers only young children killed or badly hurt by
+# someone's violence. Teens, children who come out unhurt, illness, neglect and accidents are allowed.
+PROMPT_CHILD3 = """You check one news event for a site that turns news events into short explainer videos. Before any video is made, the site applies one content rule:
+
+REFUSE the event when a young child (under 13) is killed or badly hurt by someone's violence or abuse (a shooting, a stabbing, a beating, a strike or bomb, a vehicle driven into people) and the story is about that child or those children.
+
+ALLOW everything else, including:
+- Teenagers (13 to 17) as victims: a teenager stabbed, a teen hurt at a protest, high-school students wounded. Teens are not treated as children here.
+- Children who come out unhurt: rescued, found, freed, hostages released, a child who was there when someone else was shot but was not hurt.
+- Illness, neglect and accidents with no attacker: a disease death, an abandoned baby, a fall, a drowning.
+- A minor as the perpetrator or suspect (a teenager arrested for an attack or a plot).
+- Larger events where children are among the victims but the story is about the event as a whole (a strike or shelling that kills many people, children among them; a mass shooting; an inquiry into an attack on a school).
+- Disasters, even when most of the dead are children (a building collapse, a fire, a flood, a crash, an earthquake).
+- Stories where children appear in other roles: student protests, school or family policy, a court case, a politician's grown-up son or daughter.
+
+How to decide:
+- Ask what the story is about. If you would sum it up as "a young child was killed or badly hurt by someone", refuse. That holds in a war too, when the headline makes the child the news (for example "Shell kills boy, 6"), and when adults were hurt as well but the child is the headline.
+- Age: use any age the title or summary gives. Without an age, "child", "boy", "girl", "toddler", "baby" and primary-school pupils count as young; "teen", "teenager", "student", "high school" and "youth" count as teenagers.
+- Hurt: refuse only when the child was killed or badly hurt. If the child is reported safe, unhurt or not hurt, or no child is reported hurt, allow.
+
+Answer with JSON only:
+- reason: one or two sentences saying who the story is about, the child's age group if any, and why the rule does or doesn't apply;
+- child_role: none, victim_central, victims_among_many, perpetrator_or_suspect, disaster_or_accident or other_role;
+- verdict: allow or refuse.
+
+Made-up examples:
+- "Man drives car into crowd outside a kindergarten, injuring five children" -> victim_central, refuse.
+- "Girl, 8, stabbed to death in park; man arrested" -> victim_central, refuse.
+- "Shelling of residential district kills 14, among them three children" -> victims_among_many, allow.
+- "Sixteen-year-old seriously hurt in corridor knife attack" -> other_role, allow (a teenager).
+- "Children led out unhurt after armed man enters nursery" -> other_role, allow (no child hurt).
+- "Teenager charged over arson attack on mosque" -> perpetrator_or_suspect, allow.
+- "Floods sweep away school bus; 22 pupils dead" -> disaster_or_accident, allow.
+- "Central bank raises interest rates by half a point" -> none, allow."""
+
+# child-4 (Nov 26): child-3 refused a cult leader's sentencing for killing children (Jan: allow), which child-1
+# allowed. One line says a trial, sentencing, inquiry or report about past killings is about the case.
+PROMPT_CHILD4 = PROMPT_CHILD3.replace(
+    "- Age: use any age",
+    "- A trial, sentencing, inquiry or report about past killings or abuse is about the case, not the children: "
+    "allow, even when the victims were young children.\n"
+    "- Age: use any age")
+
+PROMPTS = {"child-1": PROMPT_CHILD1, "child-2": PROMPT_CHILD2, "child-3": PROMPT_CHILD3, "child-4": PROMPT_CHILD4}
 
 RETRY_NOTE = ("Your answer couldn't be used: {why}. Answer again with only the JSON object, with the fields "
               "reason, child_role and verdict (allow or refuse).")

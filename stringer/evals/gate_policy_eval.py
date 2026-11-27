@@ -40,8 +40,9 @@ class GatePolicyEval(Step):
                 "missed_refusals_real", "fallbacks", "retries", "labeled")
     report_title = "Gate content-check evals"
     report_intro = ("Before an event can become a video, one small model call checks it against the content rule: "
-                    "no video when a child is the event's main subject as a victim (hurt, killed or put in danger). "
-                    "Teen suspects, larger events where children are among the victims, and disasters stay allowed. "
+                    "no video when a young child (under 13) is killed or badly hurt by someone's violence and the story is "
+                    "about that child. Teenagers, children who come out unhurt, illness and neglect, teen suspects, "
+                    "larger events where children are among the victims, and disasters stay allowed. "
                     "Each run reads 200 qualifying events (title, summary, kind, country) and is scored against the "
                     "answer key: Jan's labels, plus Claude's drafts that Jan checks on the review page. The keyword "
                     "rule is the free bar; it was written after reading these titles, so its score is optimistic.")
