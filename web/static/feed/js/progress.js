@@ -1025,7 +1025,7 @@
   // LIVE: ask the site again every 2.5 s until the run ends
   // ================================================================================================
   let pollT = null;
-  function poll() {
+  function poll(wait = 2500) {
     clearTimeout(pollT);
     if (!isLive() || qs.has('still')) return;
     pollT = setTimeout(async () => {
@@ -1050,9 +1050,10 @@
         }
       } catch (err) { /* keep the last record; try again */ }
       poll();
-    }, 2500);
+    }, wait);
   }
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && isLive()) poll(); });
+  // a hidden tab is slowed down by the browser, so ask at once when it's shown again
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && isLive()) poll(0); });
 
   // ================================================================================================
   // CONTROLS
