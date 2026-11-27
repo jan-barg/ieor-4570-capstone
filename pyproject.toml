@@ -17,3 +17,6 @@ dev = ["pytest==8.3.4"]
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["live: calls real APIs and costs money or credits; run with STRINGER_LIVE=1"]
+
+[tool.setuptools.packages.find]
+include = ["stringer*"]          # the folder also holds web/, render/, config/, scripts/: not packages to install

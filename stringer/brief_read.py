@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from . import clean
 
@@ -26,7 +27,9 @@ MAX_FACTS = 15
 MAX_TOKENS = 16000          # thinking counts toward this on Haiku; 2,000 was too few in the menu test
 TEXT_CHARS = 40000          # about 10,000 tokens; longer cleaned texts are cut (and the cut is recorded)
 MIN_QUOTE_WORDS = 4
-CALL_TIMEOUT_S = 180       # a call normally takes 5-15 s; DeepSeek once hung for 600 s
+CALL_TIMEOUT_S = 45        # a call normally takes 5-15 s; DeepSeek once hung for 600 s, and on Nov 27 a live
+                           # call hung until the old 180 s limit. The JSON retry follows a timed-out call.
+WORKERS = 8                # articles read side by side after the first
 
 SCHEMA = {"type": "json_schema", "json_schema": {"name": "article_facts", "strict": True, "schema": {
     "type": "object", "additionalProperties": False,
@@ -231,8 +234,15 @@ def read_article(event: dict, article: dict, complete, *, model: str = "", name:
     return out
 
 
-def read_story(event: dict, articles: list[dict], complete, *, model: str = "") -> dict:
-    """Step 1 for one story: every full-text article, one after another."""
-    rows = [read_article(event, a, complete, model=model) for a in articles if a.get("text_status") == "full"]
+def read_story(event: dict, articles: list[dict], complete, *, model: str = "", workers: int = WORKERS) -> dict:
+    """Step 1 for one story: every full-text article. The first is read alone so the shared instructions
+    are in the provider's cache, then the rest side by side (map, prompt caching: fan-out). Nov 27: read
+    one after another, a live story's 10-12 articles took a minute of the 5 a grader waits."""
+    todo = [a for a in articles if a.get("text_status") == "full"]
+    read = lambda a: read_article(event, a, complete, model=model)
+    rows = [read(a) for a in todo[:1]]
+    if len(todo) > 1:
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            rows += list(ex.map(read, todo[1:]))
     return dict(version=VERSION, articles=rows, facts=sum(len(r["facts"]) for r in rows),
                 failed=[r["article"] for r in rows if r["checks"]["error"]])

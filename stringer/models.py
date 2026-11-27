@@ -14,9 +14,12 @@ their own and LiteLLM would otherwise turn a Gemini mark into a paid stored cach
 (provider "openrouter", added Nov 26 for the fact check's model test) have them removed too."""
 from __future__ import annotations
 
+import contextlib
 import copy
 import datetime as dt
 import functools
+import os
+import threading
 import tomllib
 from dataclasses import dataclass
 
@@ -24,6 +27,30 @@ from . import keys, paths
 from .tracing import tracer
 
 CONFIG = paths.CODE / "config" / "models.toml"
+
+# Cost listeners: fn(step, alias, usd) runs after every call that got an answer. The one-event runner
+# (pipeline.py) uses it to count a video's model spend for the Gate, whichever module made the call.
+_listeners: list = []
+_listeners_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def on_cost(fn):
+    """While inside the block, fn(step, alias, usd) is called after each answered call (any thread)."""
+    with _listeners_lock:
+        _listeners.append(fn)
+    try:
+        yield fn
+    finally:
+        with _listeners_lock:
+            _listeners.remove(fn)
+
+
+def _tell_listeners(step, alias, cost: dict) -> None:
+    with _listeners_lock:
+        fns = list(_listeners)
+    for fn in fns:
+        fn(step, alias, float((cost or {}).get("total") or 0.0))
 
 
 @functools.lru_cache(maxsize=1)
@@ -109,8 +136,12 @@ def call_kwargs(alias: str, messages: list[dict]) -> dict:
     kw = dict(model=m["litellm"])
     if m["provider"] == "vertex":
         v = config()["vertex"]
-        kw.update(vertex_project=v["project"], vertex_location=v["location"],
-                  extra_headers={"x-goog-user-project": v["user_project_header"]},
+        # On Cloud Run the models are called in the service's own project (Jan, Nov 27: Vertex is turned
+        # on in agentic-ai-capstone-jgb2170); STRINGER_VERTEX_PROJECT names it. The Mac keeps models.toml's.
+        project = os.environ.get("STRINGER_VERTEX_PROJECT") or v["project"]
+        header = os.environ.get("STRINGER_VERTEX_PROJECT") or v["user_project_header"]
+        kw.update(vertex_project=project, vertex_location=v["location"],
+                  extra_headers={"x-goog-user-project": header},
                   messages=_strip_cache_marks(messages))
     elif m["provider"] == "anthropic":
         kw.update(api_key=keys.get(config()["anthropic"]["keychain_item"]), messages=messages)
@@ -149,5 +180,6 @@ def complete(step: str | None = None, messages: list[dict] | None = None, *, mod
     tracer().generation(name=name or step or alias, model=alias, litellm_model=kw["model"],
                         trace_id=trace_id, input=messages, output=text, usage=usage, cost=cost,
                         start=start, end=end, metadata=dict(metadata or {}, step=step))
+    _tell_listeners(step, alias, cost)
     return Result(text=text, model=alias, usage=usage, cost=cost,
                   latency_s=round((end - start).total_seconds(), 3), raw=resp)

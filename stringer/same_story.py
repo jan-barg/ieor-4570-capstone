@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from .events import parse_ts
@@ -40,6 +41,7 @@ from .models import cache_block, text_block
 VERSION = "p2"           # the prompt in use; PROMPTS keeps the older ones so old runs can be repeated
 VERDICTS = ("same", "follow_up", "different")
 BATCH = 25
+WORKERS = 4              # a story's batches are judged side by side (Nov 27, the live run's 5-minute budget)
 OPENING_CHARS = 600
 MAX_TOKENS = 8000            # per batch call; thinking models count their thinking here too
 SIDE_DROP_GAP = 0.30         # flag when one side's drop share is this much above the other's
@@ -289,8 +291,11 @@ def filter_story(event: dict, articles: list[dict], complete, *, lens: dict | No
     `.text` (models.complete with the step bound, or an eval runner's ctx.complete)."""
     judged, verdicts = to_judge(articles)
     problems = []
-    for c in plan_story(event, articles, batch, prompt):
-        got, probs = _judge(event, c["packets"], c["ids"], complete, "articles", "same_story", prompt)
+    calls = plan_story(event, articles, batch, prompt)
+    judge = lambda c: _judge(event, c["packets"], c["ids"], complete, "articles", "same_story", prompt)
+    with ThreadPoolExecutor(max_workers=max(1, min(WORKERS, len(calls)))) as ex:   # batches side by side (Nov 27)
+        answers = list(ex.map(judge, calls))
+    for c, (got, probs) in zip(calls, answers):
         problems += probs
         for pid, aid in c["ids"].items():
             v = got.get(pid)

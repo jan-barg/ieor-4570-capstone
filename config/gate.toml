@@ -10,7 +10,7 @@ min_reports = 7
 
 [limits]
 mode = "open"                    # open: anyone can make a video from the front page (Jan, Nov 26); closed: gallery only
-videos_per_day = 30              # a count, not dollars (Jan, Nov 26)
+videos_per_day = 10              # a count, not dollars (Jan: 30 on Nov 26, 10 on Nov 27)
 day_timezone = "America/New_York"
 per_visitor_per_hour = 3
 at_once = 3                      # videos being made at the same time, whole site

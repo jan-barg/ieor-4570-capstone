@@ -1,0 +1,42 @@
+# Build and deploy on every push to main (Cloud Build trigger in agentic-ai-capstone-jgb2170; Nov 27).
+# Same shape as fix-the-mix's working trigger: build, push, point the services at the new image.
+# Step 0 copies the private files the code needs (outlet table, map shapes, music, portrait photos)
+# from the private bucket; they are never in this public repo.
+# The website service and the video job are created once by hand (README, "Deploy"), with their
+# settings and secrets; these steps only swap their image.
+substitutions:
+  _REGION: us-east1
+  _AR_REPO: cloud-run-source-deploy
+  _PRIVATE_BUCKET: agentic-ai-capstone-jgb2170-private
+  _WEB: stringer-web
+  _JOB: stringer-make
+options:
+  logging: CLOUD_LOGGING_ONLY
+  substitutionOption: ALLOW_LOOSE
+  machineType: E2_HIGHCPU_8
+timeout: 3600s
+steps:
+  - id: Private files
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args: ["-c", "mkdir -p private && gcloud storage cp -r 'gs://${_PRIVATE_BUCKET}/deploy/*' private/"]
+  - id: Build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/stringer:$COMMIT_SHA", "."]
+  - id: Push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/stringer:$COMMIT_SHA"]
+  - id: Website
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args: ["run", "services", "update", "${_WEB}", "--region=${_REGION}", "--quiet",
+           "--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/stringer:$COMMIT_SHA",
+           "--update-labels=commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID"]
+  - id: Video job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    waitFor: ["Push"]
+    args: ["run", "jobs", "update", "${_JOB}", "--region=${_REGION}", "--quiet",
+           "--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/stringer:$COMMIT_SHA"]
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/stringer:$COMMIT_SHA"

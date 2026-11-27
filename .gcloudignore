@@ -1,0 +1,6 @@
+# What `gcloud builds submit` leaves out when the source is sent from this folder (a trigger builds
+# from GitHub instead, which has none of these). Keys never leave the machine.
+#!include:.gitignore
+#!include:.dockerignore
+.git
+.gitignore

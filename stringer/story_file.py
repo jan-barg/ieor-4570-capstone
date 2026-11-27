@@ -30,6 +30,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 
 from . import brief_blind, brief_framing, brief_merge, brief_read, brief_sides, models, pick
@@ -290,9 +291,11 @@ class Spend:
 
     def __init__(self, cap_usd: float | None = None):
         self.cap, self.by_step = cap_usd, {}
+        self._lock = threading.Lock()          # step 1 reads articles side by side (Nov 27)
 
     def total(self) -> float:
-        return round(sum(self.by_step.values()), 6)
+        with self._lock:
+            return round(sum(self.by_step.values()), 6)
 
     def wrap(self, step: str, complete):
         self.by_step.setdefault(step, 0.0)
@@ -301,7 +304,8 @@ class Spend:
             if self.cap is not None and self.total() >= self.cap:
                 raise RuntimeError(f"spend cap ${self.cap} reached")
             r = complete(messages, name=name, **params)
-            self.by_step[step] += float(((getattr(r, "cost", None) or {}).get("total")) or 0.0)
+            with self._lock:
+                self.by_step[step] += float(((getattr(r, "cost", None) or {}).get("total")) or 0.0)
             return r
         return call
 

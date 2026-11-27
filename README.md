@@ -93,6 +93,40 @@ already made in an eval is free the next time, so applying the chosen setup to a
 its eval costs nothing. `remerge_frozen` rewrites `articles.jsonl`, so run
 `filter_articles --reapply` and then `pick_articles` after it.
 
+## One live event, end to end
+
+`stringer/pipeline.py` runs modules 1–8 for one event after the Gate says go, timing each step and
+charging every model call, Tavily credit and ElevenLabs credit to the Gate's ticket (the cost check
+runs after the searches). `scripts/run_event.py` is its command:
+
+```bash
+.venv/bin/python -m scripts.run_event --list          # eligible events in the live feed now, free
+.venv/bin/python -m scripts.run_event <id8>           # the Gate, then modules 1-8; about $0.66 + credits
+```
+
+## Deploy (Cloud Run, agentic-ai-capstone-jgb2170)
+
+One image (`Dockerfile`) serves two things: the website (`web/server.py`; for now a test page, to be
+replaced by module 9) and the Cloud Run job that makes one video per click (`scripts/run_job.py`).
+A push to `main` runs `cloudbuild.yaml` through a Cloud Build trigger: it copies the private files from
+the private bucket, builds the image, and points the website and the job at it. Finished videos and
+posters go to a public-read bucket; story folders and the Gate's records go to a private one
+(`GATE_STORE=gs://<private bucket>/gate`). Keys come from Secret Manager as environment variables.
+
+Set up once (done Nov 27):
+
+```bash
+gcloud storage cp -r <the private files> gs://agentic-ai-capstone-jgb2170-private/deploy/   # outlets/, video_assets/{geo,music,people}
+.venv/bin/python -m scripts.push_secrets      # the keys into Secret Manager; prints names only
+gcloud run deploy stringer-web ... --min-instances 1 --set-env-vars ... --set-secrets ...   # the website
+gcloud run jobs create stringer-make ... --command python,-m,scripts.run_job --cpu 8 --memory 16Gi --task-timeout 25m --max-retries 0
+```
+
+Both get the same settings: `GATE_STORE`, `STRINGER_PROJECT`, `STRINGER_REGION`, `STRINGER_JOB`,
+`STRINGER_VIDEO_BUCKET`, `STRINGER_PRIVATE_BUCKET`, `STRINGER_VERTEX_PROJECT`, and every key as a
+secret. A build from this folder without the trigger: `gcloud builds submit --config cloudbuild.yaml
+--substitutions COMMIT_SHA=$(git rev-parse HEAD)` (`.gcloudignore` keeps `.env` and data out).
+
 ## Credits
 
 Media bias ratings by AllSides.com (CC BY-NC 4.0). State Media Monitor 2026, MJRC (CC BY 4.0).

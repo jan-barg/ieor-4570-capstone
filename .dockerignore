@@ -1,0 +1,16 @@
+# Only code goes into the image build; keys and local build output never do.
+.env
+.env.*
+!.env.example
+.venv/
+.pytest_cache/
+**/__pycache__/
+render/node_modules/
+render/.bundle/
+render/out/
+render/public/run-*/
+tests/
+deslop/
+preview/
+before-after.png
+.git/
