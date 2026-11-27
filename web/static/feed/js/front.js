@@ -4,7 +4,7 @@
 // While a video is being made the page asks /api/site again every few seconds; otherwise once a minute.
 (function () {
   'use strict';
-  const { D, decode, when, shortDay, ICON, $, $$, esc, transition, toast, reduced, cap, tags } = window.SG;
+  const { D, decode, when, shortDay, ICON, $, $$, esc, transition, toast, reduced, cap, tags, LABELS_CREDIT } = window.SG;
   const GET = window.STRINGER_GET;
   const app = $('#app');
   const feed = $('#feed');
@@ -426,7 +426,8 @@
       <section class="rc-sec rc-tags-sec"><p class="caps">Tags</p><div class="rc-tags">${tagsHTML(p)}</div></section>
       <section class="rc-sec"><div class="rc-foot"><span class="pill pill-ai">${esc(p.aiMark || `Made with AI from ${p.articles} news articles`)}</span>
         ${how}<button class="report-link" data-report>${ICON.flag}Report this video</button></div>
-        <p class="rc-credit" style="margin-top:12px">Events by Monitor the Situation</p></section>
+        <p class="rc-credit" style="margin-top:12px">Events by Monitor the Situation</p>
+        <p class="rc-credit" style="margin-top:4px">${esc(LABELS_CREDIT)}</p></section>
     </div>`;
   }
   const rcHead = (p) => `<div class="rc-head"><p class="caps">Receipts · part ${p.part} of ${p.of}</p><p class="h">${esc(p.headline)}</p></div>`;

@@ -234,5 +234,10 @@
   grain();
   brailleStyles();
 
-  window.SG = { D, rng, decode, when, shortDay, clock, ago, tags, ICON, $, $$, esc, media, poster, transition, toast, reduced, NOW, cap };
+  // The outlet labels (sides, reliability, state media) come from these; their licences ask for the credit
+  // wherever the labels show. Same words as the README's Credits.
+  const LABELS_CREDIT = 'Media bias ratings by AllSides.com (CC BY-NC 4.0). State Media Monitor 2026, MJRC (CC BY 4.0). '
+    + 'Domain reliability from Lin et al. 2023, PNAS Nexus.';
+
+  window.SG = { D, LABELS_CREDIT, rng, decode, when, shortDay, clock, ago, tags, ICON, $, $$, esc, media, poster, transition, toast, reduced, NOW, cap };
 })();

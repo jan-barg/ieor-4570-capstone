@@ -8,7 +8,7 @@
 // ?still (frozen), ?step=key, ?sheet.
 (function () {
   'use strict';
-  const { $, $$, esc, decode, reduced, toast } = window.SG;
+  const { $, $$, esc, decode, reduced, toast, LABELS_CREDIT } = window.SG;
   const GET = window.STRINGER_GET;
   const qs = new URLSearchParams(location.search);
   const EVENT_ID = qs.get('event') || '';
@@ -309,7 +309,8 @@
   function hoPick(h) {
     const lab = (k) => (k === 'A' || k === 'B' ? shortSide(sideLabel(k)) : k === 'wire' ? 'Wire' : 'Other');
     return `<ol class="picked">${PICKED.map((p) => `<li class="pk ${sideCls(p.side)}"><span class="pk-o caps">${esc(p.outlet)}<em>${esc(lab(p.side))}</em></span><span class="pk-t serif">${esc(p.title)}</span></li>`).join('')}</ol>
-      ${(h.flags || []).map((f) => `<p class="flag">${I.redo}<span>${esc(f)}</span></p>`).join('')}`;
+      ${(h.flags || []).map((f) => `<p class="flag">${I.redo}<span>${esc(f)}</span></p>`).join('')}
+      <p class="ho-fine">${esc(LABELS_CREDIT)}</p>`;
   }
   function hoBrief(h) {
     const sidesOf = (c) => (c.sides || []).map((k) => `<i class="sd ${sideCls(k)}" title="${esc(sideLabel(k))}"></i>`).join('');
