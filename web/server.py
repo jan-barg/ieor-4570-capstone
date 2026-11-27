@@ -58,6 +58,7 @@ from . import geo
 REFRESH_S = 300
 MEDIA_PASS_S = 3600              # how long a hidden video's link on the review desk works
 RETRY_S = 60
+FIRST_WAIT_S = 90               # with no list yet, a request waits this long for the one being built
 COOKIE = "stringer_visitor"
 IAP_USER = "X-Goog-Authenticated-User-Id"
 IAP_EMAIL = "X-Goog-Authenticated-User-Email"
@@ -119,21 +120,30 @@ class Site:
         except Exception as e:
             self.error = self.error or repr(e)[:300]
 
-    def fresh(self) -> None:
-        """Refreshes the list when it is older than REFRESH_S (after a failure, at most once a minute).
-        Called from requests too: Cloud Run gives an idle instance almost no CPU, so a timer alone stalls."""
+    def fresh(self, wait: bool = True) -> None:
+        """Refreshes the list when it is older than REFRESH_S (after a failure, at most once a minute), in the
+        calling thread. On Cloud Run that is a request's thread on purpose: an instance gets CPU only while it
+        answers a request, so a refresh left to a background thread crawls (Nov 27: the first list after a
+        deploy was still empty after 5 minutes, and came in 30 s once requests kept arriving).
+        Other requests meanwhile show the last list. With no list yet, a request (wait=True) waits for the
+        refresh in progress, up to FIRST_WAIT_S, which also keeps the instance's CPU on for it."""
         now = time.time()
-        if now - self.updated < REFRESH_S or now - self.tried < RETRY_S:
+        if now - self.updated < REFRESH_S:
             return
-        if not self.refreshing.acquire(blocking=False):
-            return                                   # another request is refreshing: show the last list
-        try:
-            self.tried = now
-            self.refresh()
-        finally:
-            self.refreshing.release()
+        if self.refreshing.acquire(blocking=False):
+            try:
+                if now - self.tried < RETRY_S:       # a failed try a moment ago: show the last list
+                    return
+                self.tried = now
+                self.refresh()
+            finally:
+                self.refreshing.release()
+        elif wait and not self.updated:              # the first list is being built: wait for it
+            if self.refreshing.acquire(timeout=FIRST_WAIT_S):
+                self.refreshing.release()
 
     def keep_fresh(self) -> None:
+        """For a site on the Mac. Not started on Cloud Run (K_SERVICE set), where requests refresh the list."""
         while True:
             self.fresh()
             time.sleep(RETRY_S)
@@ -865,8 +875,7 @@ def handler_for(site: Site):
                 return self._static(u.path[len("/static/"):])
             if u.path.startswith("/media/"):
                 return self._media(u.path[len("/media/"):], q)
-            if u.path in PAGES:
-                site.fresh()
+            if u.path in PAGES:                       # the page's own /api/site call brings the list
                 return self._page(PAGES[u.path], cookie)
             if u.path == "/api/site":
                 site.fresh()
@@ -946,7 +955,8 @@ def main(argv=None) -> int:
         fetch = lambda: feed._events_of(json.loads(path.read_text(encoding="utf-8")))
     gate = Gate(complete=None, model="") if a.no_model else Gate()
     site = Site(gate=gate, fetch=fetch)
-    threading.Thread(target=site.keep_fresh, daemon=True).start()
+    if not os.environ.get("K_SERVICE"):          # on Cloud Run a background thread gets no CPU between requests
+        threading.Thread(target=site.keep_fresh, daemon=True).start()
     threading.Thread(target=site.geo, daemon=True).start()        # build the map data once, before anyone asks
     print(f"Stringer site on :{a.port}")
     ThreadingHTTPServer(("0.0.0.0", a.port), handler_for(site)).serve_forever()

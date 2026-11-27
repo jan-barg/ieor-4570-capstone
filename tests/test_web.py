@@ -389,3 +389,72 @@ def test_a_crashed_run_shows_the_button_again_and_a_taken_down_video_is_not_serv
     s._watch.clear()                                          # (the 30-second memory of the last answer)
     assert s.record(eid) == {"state": "unavailable", "video": None, "why": None, "failed": False}
     assert not s.may_watch(path) and not s.may_watch(f"videos/{eid}/{t.id}/video.mp4")
+
+
+# ---- the list on Cloud Run: refreshed by the requests themselves (Nov 27) ----------------------------------------
+def until(ok, timeout=5.0):
+    end = time.time() + timeout
+    while not ok():
+        assert time.time() < end, "timed out"
+        time.sleep(0.01)
+
+
+def slow_site(tmp_path, gate_open: threading.Event, calls: list):
+    def fetch():
+        calls.append(threading.current_thread().name)
+        assert gate_open.wait(5)
+        return [EVENT]
+    g = Gate(MemoryStore(), complete=None, model="", tavily_left=lambda: 500)
+    return server.Site(gate=g, fetch=fetch, files=D.Files(local=tmp_path / "stories"))
+
+
+def test_a_request_refreshes_the_list_in_its_own_thread(tmp_path):
+    go, calls = threading.Event(), []
+    go.set()
+    s = slow_site(tmp_path, go, calls)
+    s.fresh()
+    assert calls == [threading.current_thread().name] and [str(l.event["id"]) for l in s.listings] == [EID]
+    s.fresh()
+    assert len(calls) == 1                                   # fresh for REFRESH_S: no second fetch
+
+
+def test_with_no_list_yet_a_request_waits_for_the_refresh_in_progress(tmp_path):
+    go, calls = threading.Event(), []
+    s = slow_site(tmp_path, go, calls)
+    first = threading.Thread(target=s.fresh)
+    first.start()
+    until(lambda: calls)
+    threading.Timer(0.2, go.set).start()
+    t0 = time.time()
+    s.fresh()                                                # waits on the first one (no fetch of its own)
+    first.join(5)
+    assert time.time() - t0 >= 0.15 and len(calls) == 1 and s.listings
+
+
+def test_with_a_list_a_request_does_not_wait_for_a_refresh(tmp_path):
+    go, calls = threading.Event(), []
+    go.set()
+    s = slow_site(tmp_path, go, calls)
+    s.fresh()
+    go.clear()
+    s.updated -= server.REFRESH_S + 1                        # the list is old now
+    s.tried -= server.RETRY_S + 1
+    first = threading.Thread(target=s.fresh)
+    first.start()
+    until(lambda: len(calls) == 2)
+    t0 = time.time()
+    s.fresh()                                                # the last list is shown at once
+    assert time.time() - t0 < 0.1 and s.listings
+    go.set()
+    first.join(5)
+
+
+def test_on_cloud_run_no_background_thread_refreshes_the_list(monkeypatch):
+    started = []
+    monkeypatch.setenv("K_SERVICE", "stringer-web")
+    monkeypatch.setattr(server.threading, "Thread", lambda target, **kw: started.append(target.__name__) or
+                        type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(server, "ThreadingHTTPServer", lambda *a, **kw: type("S", (), {"serve_forever": lambda self: None})())
+    monkeypatch.setattr(server, "Gate", lambda **kw: Gate(MemoryStore(), complete=None, model=""))
+    server.main(["--port", "0", "--no-model"])
+    assert "keep_fresh" not in started and "geo" in started
