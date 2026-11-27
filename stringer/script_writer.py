@@ -1254,14 +1254,22 @@ def cut(script: dict, p: dict, probs: list[dict]) -> tuple[dict, list[dict], str
 
 # ---- 6. what code adds -------------------------------------------------------------------------------
 
+# Who made the outlet labels, one line each with its licence (Jan's pick, Nov 27). Every run reads the reliability
+# scores (the fact check) and the state media labels (the lens and the brief); AllSides only builds the US sides.
+LABEL_CREDITS = dict(allsides="Media bias ratings by AllSides (CC BY-NC 4.0)",
+                     state_media="State media labels: State Media Monitor 2026 (CC BY 4.0)",
+                     reliability="Outlet reliability: Lin et al. 2023")
+
+
 def credits(sf: dict, p: dict) -> list[str]:
+    """For the sources card and the post's caption. Code-made, so a re-render recomputes them (video/make.py)."""
     ev = sf.get("event") or {}
     out = [sf.get("attribution") or "Events by Monitor the Situation (monitor-the-situation.com)"]
     if ev.get("url"):
         out.append(ev["url"])
     if p["two_sided"] and any(str(s).startswith("us_") for s in p["letters"]):
-        out.append("Media bias ratings by AllSides")
-    return out
+        out.append(LABEL_CREDITS["allsides"])
+    return out + [LABEL_CREDITS["state_media"], LABEL_CREDITS["reliability"]]
 
 
 def sources_card(sf: dict, p: dict) -> dict:

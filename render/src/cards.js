@@ -320,22 +320,26 @@ export function drawSources(ctx, s) {
   const oy = by + 28 + (segs.length - 1) * 18 + 20;
   ctx.globalAlpha = fade(40);
   smallCaps(ctx, 'Outlets', x, oy, {size: 7.5, color: PAL.inkSoft});
+  // the credits are licence terms, so every credit line shows: measure them first and let the outlet list give way
+  ctx.font = `500 7.5px ${SANS}`;      // 7.5 units = 25 px, the smallest size the layout eval allows
+  const credLines = [];
+  for (const c of sc.credits || []) credLines.push(...wrap(ctx, c, w));
+  const lastCredit = L.bottom + 4 - 22;      // the AI pill sits 22 under the last credit, no lower than L.bottom + 4
+  const outRoom = 1 + Math.floor((lastCredit - (credLines.length - 1) * 9.3 - 16 - (oy + 13)) / 11.5);
   ctx.font = `500 9px ${SANS}`;
-  const outLines = wrap(ctx, (sc.outlets || []).join(' · '), w).slice(0, 5);
+  const outLines = wrap(ctx, (sc.outlets || []).join(' · '), w).slice(0, Math.max(1, Math.min(5, outRoom)));
+  if (outLines.length) outLines[outLines.length - 1] = outLines[outLines.length - 1].replace(/\s*·\s*$/, '');   // a cut list ends on a name
   drawDecodingText(ctx, outLines, {x, y: oy + 13, size: 9, lineHeight: 11.5, font: `500 9px ${SANS}`, color: PAL.ink,
     revealed: typed(t, 44, 0.25), frame: s.frame});
 
   // credits (the site's name; full links go in the post's caption), then the AI mark right under them
   const cy = oy + 13 + (outLines.length - 1) * 11.5 + 16;
   ctx.globalAlpha = fade(70);
-  ctx.font = `500 7.5px ${SANS}`;      // 7.5 units = 25 px, the smallest size the layout eval allows
+  ctx.font = `500 7.5px ${SANS}`;
   ctx.fillStyle = PAL.inkSoft;
-  const credLines = [];
-  for (const c of sc.credits || []) credLines.push(...wrap(ctx, c, w));
-  const shown = credLines.slice(0, 6);
-  shown.forEach((l, i) => ctx.fillText(l, x, cy + i * 9.3));
+  credLines.forEach((l, i) => ctx.fillText(l, x, cy + i * 9.3));
   ctx.globalAlpha = fade(84);
-  if (sc.ai_mark) pill(ctx, sc.ai_mark, x, Math.min(L.bottom + 4, cy + (shown.length - 1) * 9.3 + 22), {bg: PAL.mustard, fg: PAL.ink, size: 8.5});
+  if (sc.ai_mark) pill(ctx, sc.ai_mark, x, Math.min(L.bottom + 4, cy + (credLines.length - 1) * 9.3 + 22), {bg: PAL.mustard, fg: PAL.ink, size: 8.5});
   ctx.globalAlpha = 1;
   ctx.restore();
 }

@@ -603,6 +603,31 @@ def test_an_approved_portrait_reaches_the_plan_and_the_credits(tmp_path, geo, mo
     people._load.cache_clear()
 
 
+def test_portrait_credits_take_one_line_per_photo_source():
+    def pt(name, how="cut out from", author="The White House", lic="Public domain"):
+        return dict(name=name, credit=f"Portrait of {name} …", photo=dict(how=how, author=author, license=lic))
+    assert people.credits([pt("Ana Petrel"), pt("Ivo Brand"), pt("Ana Petrel"), pt("Mara Sund", author="C. Shutter", lic="CC0"),
+                           pt("Lea Moss", how="redrawn from"), dict(name="Old", credit="Portrait of Old by X")]) == [
+        "Portrait of Lea Moss redrawn from a photo by The White House, Public domain",
+        "Portrait of Mara Sund cut out from a photo by C. Shutter, CC0",
+        "Portrait of Old by X",                                                     # an older plan's portrait: as it was
+        "Portraits of Ana Petrel and Ivo Brand cut out from photos by The White House, Public domain"]
+    assert people.credits([pt("A"), pt("B"), pt("C")]) == ["Portraits of A, B and C cut out from photos by The White House, Public domain"]
+
+
+def test_a_rerender_gets_todays_credits(tmp_path, monkeypatch):
+    from stringer.video import make
+    (tmp_path / "script.json").write_text(json.dumps({"title": "t", "credits": ["Media bias ratings by AllSides"]}))
+    monkeypatch.setattr(make.story_file, "read", lambda d: ([], None))
+    monkeypatch.setattr(make.fact_check, "read_checked", lambda d: {"event": {"url": "https://mts.test/e/1"}})
+    monkeypatch.setattr(make.fact_check, "read_articles", lambda d: [])
+    monkeypatch.setattr(make.sw, "contexts_for", lambda facts, arts: {})
+    monkeypatch.setattr(make.sw, "packet", lambda sf, facts, ctx: {"two_sided": True, "letters": {"us_left": "A", "us_right": "B"}})
+    script, _, _ = make.inputs(tmp_path)
+    assert script["title"] == "t" and "Media bias ratings by AllSides (CC BY-NC 4.0)" in script["credits"]
+    assert "Media bias ratings by AllSides" not in script["credits"]
+
+
 def test_props_list_matches_the_drawing_code():
     js = (paths.CODE / "render" / "src" / "props.js").read_text(encoding="utf-8")
     body = js[js.index("const DRAW = {"):js.index("export const PROPS")]

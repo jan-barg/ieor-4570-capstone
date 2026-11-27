@@ -50,8 +50,28 @@ def portrait(name: str, folder: Path | None = None) -> dict | None:
     cut = folder / p["cutout"] if p.get("cutout") else None
     has_cut = bool(cut and cut.is_file() and isinstance(face, list) and len(face) == 4)
     how = "cut out from" if has_cut else "redrawn from"
-    credit = f"Portrait of {p['name']} {how} a photo by {p.get('author') or 'unknown'}, {p.get('license') or ''}".strip(", ")
-    out = dict(name=p["name"], file=str(folder / p["file"]), credit=credit)
+    author, lic = p.get("author") or "unknown", p.get("license") or ""
+    credit = f"Portrait of {p['name']} {how} a photo by {author}, {lic}".strip(", ")
+    out = dict(name=p["name"], file=str(folder / p["file"]), credit=credit, photo=dict(how=how, author=author, license=lic))
     if has_cut:
         out.update(cutout=str(cut), face=[float(x) for x in face])
     return out
+
+
+def credits(portraits: list[dict]) -> list[str]:
+    """The sources card's portrait credits, one line per photo source: "Portraits of A and B cut out from photos by
+    The White House, Public domain". A portrait without its photo details keeps its own credit."""
+    groups: dict[tuple, set] = {}
+    out = set()
+    for p in portraits:
+        ph = p.get("photo")
+        if ph:
+            groups.setdefault((ph["how"], ph["author"], ph["license"]), set()).add(p["name"])
+        elif p.get("credit"):
+            out.add(p["credit"])
+    for (how, author, lic), names in groups.items():
+        ns = sorted(names)
+        who = ns[0] if len(ns) == 1 else ", ".join(ns[:-1]) + " and " + ns[-1]
+        photo = "a photo" if len(ns) == 1 else "photos"
+        out.add(f"Portrait{'s' if len(ns) > 1 else ''} of {who} {how} {photo} by {author}, {lic}".strip(", "))
+    return sorted(out)

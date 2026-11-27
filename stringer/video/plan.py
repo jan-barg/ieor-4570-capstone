@@ -258,7 +258,7 @@ def build(beats: list[dict], narr: dict, script: dict, event: dict, *, swaps: li
     credits = [c for c in script.get("credits") or [] if not re.match(r"https?://", str(c))]
     links = [c for c in script.get("credits") or [] if re.match(r"https?://", str(c))]
     voice_credit = "Narration voice by ElevenLabs" if narr["voice"].get("engine") == "elevenlabs" else ""
-    portrait_credits = sorted({b["broll"]["portrait"]["credit"] for b in plan_beats if (b["broll"].get("portrait") or {})})
+    portrait_credits = people.credits([b["broll"]["portrait"] for b in plan_beats if b["broll"].get("portrait")])
     total = fr(narr["duration"])
     return dict(
         version=VERSION, catalog=shots.catalog()["version"], fps=FPS, width=WIDTH, height=HEIGHT, frames=total,

@@ -531,8 +531,9 @@ def test_good_script_is_written_once_and_checked_by_the_other_models():
     assert s["beats"][4]["blanks"]["quote"]["text"].startswith("The bridge will reopen")
     assert s["beats"][2]["named"] == ["the Lorne Interior Ministry", "the regional governor's office"]
     assert s["sources_card"]["read"] == 4 and s["sources_card"]["sides"][1]["read"] == 2
-    assert s["credits"] == ["Events by Monitor the Situation (monitor-the-situation.com)", "https://mts.test/e/00000000"]
-    assert s["caption"].endswith("https://mts.test/e/00000000")
+    assert s["credits"] == ["Events by Monitor the Situation (monitor-the-situation.com)", "https://mts.test/e/00000000",
+                            sw.LABEL_CREDITS["state_media"], sw.LABEL_CREDITS["reliability"]]     # not a US story: no AllSides
+    assert s["caption"].endswith("https://mts.test/e/00000000 · " + " · ".join(s["credits"][2:]))
     assert 135 <= s["words"] <= 165 and s["voice"].startswith("Floodwater has closed")
     line_msg = fake.calls[1]["messages"][-1]["content"]
     assert "[[" in line_msg and "L3 · claim_vs_claim" in line_msg and "L9" not in line_msg   # the closing isn't judged
@@ -656,3 +657,12 @@ def test_script_file_is_written_whole(tmp_path):
     p = sw.write_file(tmp_path, s)
     assert p.name == "script.json" and sw.read_script(tmp_path)["beats"][0]["shot"] == "hook"
     assert not [x for x in tmp_path.iterdir() if x.name.startswith(".")]
+
+
+def test_credits_name_each_label_source_with_its_licence():
+    sf = {"event": {"url": "https://mts.test/e/1"}}
+    us = sw.credits(sf, {"two_sided": True, "letters": {"us_left": "A", "us_right": "B"}})
+    assert us[1:] == ["https://mts.test/e/1", "Media bias ratings by AllSides (CC BY-NC 4.0)",
+                      "State media labels: State Media Monitor 2026 (CC BY 4.0)", "Outlet reliability: Lin et al. 2023"]
+    other = sw.credits(sf, {"two_sided": True, "letters": {"made_up_a": "A", "made_up_b": "B"}})
+    assert not any("AllSides" in c for c in other) and other[-2:] == us[-2:]       # every run reads these two
