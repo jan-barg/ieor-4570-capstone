@@ -1,7 +1,7 @@
 """Step 6: checks the rendered MP4 and writes what goes with it (design settled Nov 26).
 
-  - loudness: measured, then set to -14 LUFS (the level TikTok and Instagram play at), true peak at most
-    -1.5 dB, in two ffmpeg passes; the picture is copied untouched;
+  - loudness: measured, raised to -14 LUFS (the level TikTok and Instagram play at) with one fixed gain and
+    a limiter under the -1.5 dB true-peak line, then measured again; the picture is copied untouched;
   - the file's facts from ffprobe, checked against what the plan asked for;
   - poster.jpg: the hook, once its title has decoded;
   - captions.vtt and captions.srt: every spoken word (the burned-in captions leave out words already on
@@ -39,14 +39,26 @@ def probe(mp4: Path) -> dict:
 
 
 def loudness(mp4: Path) -> dict:
-    """EBU R128 measurement of the file's audio (integrated LUFS, true peak, range)."""
-    err = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(mp4), "-af",
-                          f"loudnorm=I={LUFS}:TP={TRUE_PEAK}:LRA={LRA}:print_format=json", "-f", "null", "-"],
-                         capture_output=True, text=True).stderr
-    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", err, re.S)
-    if not m:
-        raise RuntimeError(f"no loudness measurement for {mp4.name}")
-    return json.loads(m.group(0))
+    """EBU R128 measurement of the file's audio: {"input_i": integrated LUFS, "input_tp": true peak in dB,
+    "input_lra": range}. Reads the sound only (-vn) with ffmpeg's ebur128 meter. Until Nov 27 this was
+    loudnorm's measuring pass, which also decoded the whole picture: on a 64 s video 1.6 s a pass against
+    0.27 s now, with the same readings (-14.5 LUFS, -2.2 dB)."""
+    err = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-vn", "-i", str(mp4), "-af", "ebur128=peak=true",
+                          "-f", "null", "-"], capture_output=True, text=True).stderr
+    return read_ebur128(err, mp4.name)
+
+
+def read_ebur128(text: str, name: str = "the file") -> dict:
+    """The three numbers from the "Summary:" block ebur128 prints at the end of its run."""
+    summary = text[text.rfind("Summary:"):] if "Summary:" in text else ""
+
+    def num(label: str) -> float | None:
+        m = re.search(rf"^\s*{label}:\s*(-?\d+(?:\.\d+)?)\s", summary, re.M)
+        return float(m.group(1)) if m else None
+    i, tp, lra = num("I"), num("Peak"), num("LRA")
+    if i is None or tp is None:
+        raise RuntimeError(f"no loudness measurement for {name}")
+    return {"input_i": i, "input_tp": tp, "input_lra": lra if lra is not None else 0.0}
 
 
 LIMIT_DB = TRUE_PEAK - 1.0      # the limiter's ceiling: 1 dB of room for the AAC encoder's overshoot

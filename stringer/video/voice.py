@@ -10,7 +10,6 @@ mark covered; the voice sends back when every letter (or word) is spoken; that g
 Engines (all return the same narration dict):
   ElevenLabs  the real voice, one "with timestamps" call (key ELEVENLABS_API_KEY in stringer/.env); v4 Turbo,
               which reads the voice director's tags (direct.py)
-  MacVoice    the render test's stand-in macOS system voice (free; word starts only)
   Paced       no voice at all: silent audio and evenly paced words (tests and quick layout renders)
 
 Recordings are saved under their text, engine, voice and settings, so the same script is never paid
@@ -42,7 +41,6 @@ OPENING_MAX = 0.1      # silence before the first word longer than this is cut (
 MAX_TEMPO = 1.12       # the most a recording is sped up to fit the length bar (ffmpeg atempo keeps the pitch)
 HOLD = 1.5             # seconds the sources card stays up after the last word
 LEAD = 0.05            # a cut lands this long before its beat's first word (inside the pause)
-SWIFT = paths.CODE / "render" / "voice" / "tts.swift"
 
 
 class VoiceError(RuntimeError):
@@ -175,42 +173,6 @@ class ElevenLabs:
                     call_seconds=round(time.time() - t0, 2))
 
 
-class MacVoice:
-    """The render test's stand-in: a macOS system voice that reports when each word starts."""
-    engine = "macos"
-
-    def __init__(self, voice: str = "Samantha"):
-        self.voice = voice
-
-    def key(self) -> dict:
-        return dict(engine=self.engine, voice=self.voice)
-
-    def speak(self, text: str, out: Path) -> dict:
-        if shutil.which("swift") is None:
-            raise VoiceError("the stand-in voice needs macOS (swift)")
-        with tempfile.TemporaryDirectory() as d:
-            d = Path(d)
-            (d / "t.txt").write_text(text, encoding="utf-8")
-            subprocess.run(["swift", str(SWIFT), str(d / "t.txt"), str(d / "a.caf"), str(d / "m.json")],
-                           check=True, capture_output=True, timeout=300)
-            v = json.loads((d / "m.json").read_text(encoding="utf-8"))
-            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(d / "a.caf"), "-ar", "44100", "-ac", "1",
-                            "-b:a", "128k", str(out)], check=True)
-        per_second = v["sampleRate"] * (v["bytesPerFrame"] if max(m["offset"] for m in v["marks"]) > v["frames"] * 1.01 else 1)
-        units = _utf16_to_index(text)
-        starts = [(units.get(m["loc"], None), m["offset"] / per_second) for m in v["marks"]]
-        return dict(word_starts=[(i, t) for i, t in starts if i is not None], seconds=_duration(out), credits=0)
-
-
-def _utf16_to_index(text: str) -> dict[int, int]:
-    """macOS reports positions in UTF-16 units; map them to Python string indexes."""
-    out, u = {}, 0
-    for i, ch in enumerate(text):
-        out[u] = i
-        u += 2 if ord(ch) > 0xFFFF else 1
-    return out
-
-
 class Paced:
     """No voice: silent audio, words evenly paced (2.6 a second by default), a pause between beats."""
     engine = "paced"
@@ -269,7 +231,7 @@ def word_timings(text: str, spoken: dict) -> list[dict]:
         by = {c: (s, e) for c, s, e in spoken["word_times"]}
         for w in words:
             w["start"], w["end"] = by.get(w["c0"], (None, None))
-    else:                                                    # word starts only (the macOS voice)
+    else:                                                    # an engine that gives word starts only
         starts = sorted(spoken["word_starts"])
         for w in words:
             hit = [t for c, t in starts if w["c0"] <= c < w["c1"]]

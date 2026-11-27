@@ -1,8 +1,11 @@
 """Tavily and Guardian clients.
 
-Every response is saved under stringer_private/frozen/raw/<event>/<name>.json (with its params,
-no key), and a saved response is reused instead of calling again. So re-running a story costs
-no credits, and the frozen fixtures can always be rebuilt from raw/.
+Every successful response is saved under <raw folder>/<event>/<name>.json (with its params, no key),
+and a saved response is reused instead of calling again. So re-running a story costs no credits, and
+the frozen fixtures can always be rebuilt from raw/. A failed call is not saved, so a re-run tries it
+again. The raw folder is stringer_private/frozen/raw for the fixtures, live/raw for live runs on the
+Mac, and a temp folder inside the Cloud Run job. A saved response is found by its name alone: a re-run
+with a different query under the same name gets the old answer.
 
 Tavily credits are counted from each response's `usage.credits`, and a budget stops the run
 before a call would go over it."""
@@ -137,11 +140,15 @@ class Tavily:
 
 
 class Guardian:
-    """Guardian Content API (free developer key: 1 call/s, 500 calls/day)."""
+    """Guardian Content API (free developer key: 1 call/s, 500 calls/day). Calls start at least 1.1 s apart
+    across threads: each takes the next free start time under the lock, then waits and calls outside it,
+    so one slow answer no longer holds the others up (Nov 27: a 30 s timeout inside the lock did)."""
     BASE = "https://content.guardianapis.com/"
     FIELDS = "bodyText,wordcount,firstPublicationDate,byline,trailText,headline"
+    TIMEOUT_S = 10          # a normal answer takes about a second
+    GAP_S = 1.1
     _lock = threading.Lock()
-    _last = [0.0]
+    _last = [0.0]           # the start time handed to the latest call
 
     def __init__(self, raw_dir=None, offline=False):
         self.raw_dir = raw_dir or paths.RAW
@@ -157,23 +164,24 @@ class Guardian:
             return rec
         if self.offline:
             raise FileNotFoundError(f"offline and no saved response: {out}")
-        with self._lock:   # one call per second across threads
-            wait = 1.1 - (time.time() - self._last[0])
-            if wait > 0:
-                time.sleep(wait)
-            url = self.BASE + path + ("?" + urllib.parse.urlencode(params) if params else "")
-            req = urllib.request.Request(url, headers={"api-key": keys.get("guardian_api_key"),
-                                                       "User-Agent": "stringer-class-project"})
-            start = dt.datetime.now(dt.timezone.utc)
-            try:
-                with urllib.request.urlopen(req, timeout=30) as r:
-                    status, resp = r.status, json.loads(r.read())["response"]
-            except urllib.error.HTTPError as e:
-                status, resp = e.code, {"error": e.read()[:300].decode("utf-8", "replace")}
-            except (urllib.error.URLError, TimeoutError) as e:
-                status, resp = 0, {"error": repr(e)}
-            self._last[0] = time.time()
+        with self._lock:   # one call start per GAP_S across threads
+            slot = max(time.time(), self._last[0] + self.GAP_S)
+            self._last[0] = slot
             self.calls += 1
+        wait = slot - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        url = self.BASE + path + ("?" + urllib.parse.urlencode(params) if params else "")
+        req = urllib.request.Request(url, headers={"api-key": keys.get("guardian_api_key"),
+                                                   "User-Agent": "stringer-class-project"})
+        start = dt.datetime.now(dt.timezone.utc)
+        try:
+            with urllib.request.urlopen(req, timeout=self.TIMEOUT_S) as r:
+                status, resp = r.status, json.loads(r.read())["response"]
+        except urllib.error.HTTPError as e:
+            status, resp = e.code, {"error": e.read()[:300].decode("utf-8", "replace")}
+        except (urllib.error.URLError, TimeoutError) as e:
+            status, resp = 0, {"error": repr(e)}
         end = dt.datetime.now(dt.timezone.utc)
         rec = {"path": path, "params": params, "status": status, "called_at": _now_iso(),
                "response": resp}

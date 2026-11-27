@@ -11,6 +11,17 @@ Two ways in:
                                               step 3 sides (code), 3b blindspot judge, step 4 framing
   assemble(meta, step1, step2, judged, framing, ...)   joins step outputs already made (the eval runs)
 
+The order of the live steps (Nov 27, for the 5 minutes a viewer waits). Once step 2's merge call has
+fixed the claims, three things read only those claims and not each other, so they run side by side:
+
+    read (all articles at once) -> merge call (+ retry) --+-- conflict pass, pair check, own-marks check
+                                                          +-- step 3 sides (code) -> 3b judge  and  step 4
+                                                          +-- `early`, if given: the fact check's judge
+    then: step 3 again on the finished claims (code), joined with the 3b answers -> assemble
+
+On the four live runs of Nov 27 the three lanes took 58, 40, 67 and 32 s one after another, and 30, 22,
+33 and 15 s side by side. No call's input changed.
+
 Rules:
 - Claims point to fact ids; quotes live once, in facts.jsonl. A fact's `pos` is where its quote
   starts in the article's cleaned, normalized text (brief_read.shown_text, then brief_read.norm),
@@ -21,7 +32,8 @@ Rules:
   "not checked" (one independent source, or past the judge's 10 a side). Only "blindspot" claims are
   listed under blindspots[], split into central and detail.
 - status and reason on each claim stay empty: the fact check (module 6) fills them.
-- validate() checks that every id points somewhere; build_story and the script stop on a problem.
+- validate() checks that every id points somewhere. Its problems are reported, never a stop: the live
+  run counts them in pipeline.json and scripts/build_story_files.py prints them.
 """
 from __future__ import annotations
 
@@ -29,8 +41,10 @@ import datetime as dt
 import json
 import os
 import re
+import copy
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import brief_blind, brief_framing, brief_merge, brief_read, brief_sides, models, pick
@@ -40,7 +54,6 @@ FACTS_POS = ("character offset of the quote (brief_read.norm, outer punctuation 
              "brief_read.norm(brief_read.shown_text(article)[0])")
 EVENT_FIELDS = ("id", "title", "summary", "category", "subtype", "severity", "confidence", "country",
                 "location_name", "lat", "lng", "report_count", "start", "created_at", "url", "source_urls")
-STEPS = ("brief_read", "brief_merge", "brief_blind", "brief_framing")      # the model steps, in order
 
 
 # ---- inputs -----------------------------------------------------------------------------------------
@@ -286,6 +299,11 @@ def quote_at(article: dict, fact: dict, sentences: int = 1) -> dict | None:
 
 # ---- running it all ---------------------------------------------------------------------------------
 
+class BudgetExceeded(RuntimeError):
+    """The story's spend cap is reached. The steps' own error handling lets an error of this name through
+    (brief_read._call), so the build stops instead of going on with empty answers."""
+
+
 class Spend:
     """Adds up what each step's calls cost and stops before a call once the cap is passed."""
 
@@ -302,7 +320,7 @@ class Spend:
 
         def call(messages, name=None, **params):
             if self.cap is not None and self.total() >= self.cap:
-                raise RuntimeError(f"spend cap ${self.cap} reached")
+                raise BudgetExceeded(f"spend cap ${self.cap} reached")
             r = complete(messages, name=name, **params)
             with self._lock:
                 self.by_step[step] += float(((getattr(r, "cost", None) or {}).get("total")) or 0.0)
@@ -318,12 +336,16 @@ def live_complete(step: str, trace_id: str | None = None):
 
 
 def build_story(meta: dict, articles: list[dict], complete_for=None, *, n: int = 10, cap_usd: float | None = None,
-                trace_id: str | None = None) -> tuple[list[dict], dict]:
+                trace_id: str | None = None, early=None) -> tuple[list[dict], dict]:
     """Every step live for one story. complete_for(step) -> (model alias, complete function);
-    the default calls the models in config/models.toml."""
+    the default calls the models in config/models.toml.
+
+    early: an optional function(facts, story_file) started on its own thread as soon as the claims are
+    final, with a Story File that has no conflict marks, blindspot checks or framing yet (the live run's
+    fact-check judge, fact_check.judge_early). build_story waits for it; an error in it is raised here."""
     complete_for = complete_for or (lambda step: live_complete(step, trace_id))
     spend = Spend(cap_usd)
-    event = meta["event"]
+    event, lens = meta["event"], meta["lens"]
     arts, groups = picked(meta, articles, n)
     used = {}
 
@@ -332,21 +354,46 @@ def build_story(meta: dict, articles: list[dict], complete_for=None, *, n: int =
         used[step] = alias
         return alias, spend.wrap(step, fn)
 
-    alias, fn = step_fn("brief_read")
-    step1 = brief_read.read_story(event, arts, fn, model=alias)
-    alias, fn = step_fn("brief_merge")
-    step2 = brief_merge.merge_story(event, step1, fn, model=alias, times=times_of(arts))
-    sides = brief_sides.add_sides(step2, step1, arts, groups, meta["lens"], event)
-    alias, fn = step_fn("brief_blind")
-    judged = brief_blind.judge_blindspots(sides, arts, event, fn, model=alias)
-    alias, fn = step_fn("brief_framing")
-    framing = brief_framing.frame_story(sides, step1, arts, event, fn, model=alias)["framing"]
-    versions = dict(brief_read=brief_read.VERSION, brief_merge=brief_merge.VERSION, brief_sides=brief_sides.VERSION,
-                    brief_blind=brief_blind.VERSION, brief_framing=brief_framing.VERSION)
-    steps = {s: dict(version=versions[s], model=used.get(s, "code")) for s in versions}
-    facts, sf = assemble(meta, step1, step2, judged, framing, steps=steps,
-                         cost_usd={s: round(v, 6) for s, v in spend.by_step.items()}, trace_id=trace_id)
-    return facts, sf
+    def assembled(step2, judged, framing):
+        versions = dict(brief_read=brief_read.VERSION, brief_merge=brief_merge.VERSION, brief_sides=brief_sides.VERSION,
+                        brief_blind=brief_blind.VERSION, brief_framing=brief_framing.VERSION)
+        steps = {s: dict(version=versions[s], model=used.get(s, "code")) for s in versions}
+        return assemble(meta, step1, step2, judged, framing, steps=steps,
+                        cost_usd={s: round(v, 6) for s, v in spend.by_step.items()}, trace_id=trace_id)
+
+    read_alias, read_fn = step_fn("brief_read")
+    merge_alias, merge_fn = step_fn("brief_merge")
+    blind_alias, blind_fn = step_fn("brief_blind")
+    frame_alias, frame_fn = step_fn("brief_framing")
+    times = times_of(arts)
+    step1 = brief_read.read_story(event, arts, read_fn, model=read_alias)
+    step2 = brief_merge.merge_claims(event, step1, merge_fn, model=merge_alias, times=times)
+    if not brief_merge.claims_final_after_merge():
+        # a merge version whose later calls still change the claims (the joins): one thing after another
+        step2 = brief_merge.mark_conflicts(event, step2, merge_fn, model=merge_alias, times=times)
+        sides = brief_sides.add_sides(step2, step1, arts, groups, lens, event)
+        judged = brief_blind.judge_blindspots(sides, arts, event, blind_fn, model=blind_alias)
+        framing = brief_framing.frame_story(sides, step1, arts, event, frame_fn, model=frame_alias)["framing"]
+        facts, sf = assembled(step2, judged, framing)
+        if early is not None:
+            early(facts, sf)
+        return facts, sf
+
+    # The claims are final. The lanes below read a copy taken now; the conflict lane marks the original.
+    seen = copy.deepcopy(step2)
+    sides_seen = brief_sides.add_sides(seen, step1, arts, groups, lens, event)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_conflicts = ex.submit(brief_merge.mark_conflicts, event, step2, merge_fn, model=merge_alias, times=times)
+        f_blind = ex.submit(brief_blind.judge_sides, sides_seen, arts, event, blind_fn, model=blind_alias)
+        f_frame = ex.submit(brief_framing.frame_story, sides_seen, step1, arts, event, frame_fn, model=frame_alias)
+        f_early = ex.submit(early, *assembled(seen, sides_seen, None)) if early is not None else None
+        waits = [f for f in (f_conflicts, f_blind, f_frame, f_early) if f is not None]
+    for f in waits:                       # every lane has ended; the first error, if any, is raised
+        f.result()
+    step2 = f_conflicts.result()
+    sides = brief_sides.add_sides(step2, step1, arts, groups, lens, event)      # code: now with the conflict marks
+    judged = brief_blind.with_judged(sides, f_blind.result())
+    return assembled(step2, judged, f_frame.result()["framing"])
 
 
 # ---- files ------------------------------------------------------------------------------------------

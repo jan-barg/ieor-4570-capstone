@@ -602,6 +602,39 @@ def test_unusable_answers_mean_no_video_never_a_guess():
     assert fake.kinds() == ["script", "script"] and fake.calls[1]["name"] == "script retry json"
 
 
+def test_a_breakdown_is_told_apart_from_a_judgment_about_the_story():
+    # a judgment: the line check answered, and said the hook is not backed
+    judged = write(Fake([answer(), answer()], lines={"has closed the Varsel": dict(verdict="not backed", problem="other", why="x")}))
+    assert judged["status"] == "no video" and judged["broke"] == ""
+    # breakdowns: the writer gave nothing usable; the line check's model was down
+    assert write(Fake(["not json", "{\"beats\": []}"]))["broke"] == "the script writer gave no usable answer"
+
+    class LineCheckDown(Fake):
+        def __call__(self, messages, name=None, model=None, **params):
+            if params["response_format"]["json_schema"]["name"] == "line_check":
+                raise TimeoutError("no answer")
+            return super().__call__(messages, name=name, model=model, **params)
+    down = write(LineCheckDown([answer(), answer()]))
+    assert down["status"] == "no video" and down["broke"].startswith("the line check gave no answer for")
+    # no kept claims: the story's own doing when claims were dropped, a breakdown when the fact check never answered
+    assert sw.breakdown({"claims": [{"status": "dropped"}]}, None, sw.NO_CLAIMS) == ""
+    assert sw.breakdown({"claims": [{"status": "unchecked"}, {"status": "dropped"}]}, None, sw.NO_CLAIMS) == \
+        "the fact check gave no answer for 1 of 2 claims"
+    assert "a step failed" in sw.breakdown({"claims": [], "meta": {"errors": ["step 2: no usable answer"]}}, None, sw.NO_CLAIMS)
+    assert write(Fake([answer()]))["broke"] == ""                       # a finished script has none
+
+
+def test_a_failed_wording_check_is_said_out_loud():
+    class WordsDown(Fake):
+        def __call__(self, messages, name=None, model=None, **params):
+            if params["response_format"]["json_schema"]["name"] == "wording":
+                raise TimeoutError("no answer")
+            return super().__call__(messages, name=name, model=model, **params)
+    s = write(WordsDown([answer()]))
+    assert s["status"] == "ok"                                           # as before: the video is still made
+    assert any(w["rule"] == "loaded words" and "not checked" in w["what"] for w in s["checks"]["final"]["warnings"])
+
+
 def test_one_retry_rescues_a_broken_answer():
     fake = Fake(["```json\n{broken", answer()])
     assert write(fake)["status"] == "ok"

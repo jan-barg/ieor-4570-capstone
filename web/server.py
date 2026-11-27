@@ -4,7 +4,8 @@ For testing the deploy only (Jan, Nov 27); the real front page (module 9) replac
 library only. Routes:
     GET  /                 the list (refreshed from the live feed every few minutes)
     POST /make?event=<id>  the click: the Gate decides; on go, the event is saved and the job starts
-    GET  /status?event=<id>  the event's record: making, done (with the video) or no video
+    GET  /status?event=<id>  what a visitor may see of the event (the Gate's view): making, done (with the
+                           video), no video, unavailable, or nothing yet
     GET  /media/videos/<event>/<ticket>/<file>   a finished video, poster or captions, streamed from the
                            private video bucket (with Range, so the player can seek)
     GET  /healthz          "ok"
@@ -28,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from stringer import cloud, feed, pipeline
-from stringer.gate import Gate, TooCostly
+from stringer.gate import Gate, TooCostly, VideoOverBudget
 from stringer.gate.core import safe_id
 
 REFRESH_S = 300
@@ -49,6 +50,7 @@ class Site:
         self.tried = 0.0
         self.lock = threading.Lock()
         self.refreshing = threading.Lock()
+        self._watch: dict[str, tuple[float, bool]] = {}
 
     def refresh(self) -> None:
         try:
@@ -80,9 +82,23 @@ class Site:
             time.sleep(RETRY_S)
 
     def record(self, event_id: str) -> dict:
-        rec, _ = self.gate.store.get(f"events/{safe_id(event_id)}.json")
-        rec = rec or {}
-        return {"state": rec.get("state"), "video": rec.get("video"), "why": rec.get("no_video_reason")}
+        """What the page shows for one event: the Gate's view of it (gate.view), never the raw record.
+        The record still says "making" after a run has crashed, and still holds a taken-down video."""
+        v = self.gate.view(event_id)
+        state = {"has_video": "done", "ready": None}.get(v["state"], v["state"])
+        return {"state": state, "video": v.get("video"), "why": v.get("reason"), "failed": bool(v.get("failed"))}
+
+    def may_watch(self, name: str) -> bool:
+        """gate.may_watch with a 30-second memory: a player asks for one video in many pieces."""
+        now = time.time()
+        hit = self._watch.get(name)
+        if hit and now - hit[0] < 30:
+            return hit[1]
+        ok = self.gate.may_watch(name)
+        if len(self._watch) > 500:
+            self._watch.clear()
+        self._watch[name] = (now, ok)
+        return ok
 
     def make(self, event_id: str, visitor: str) -> dict:
         with self.lock:
@@ -92,18 +108,25 @@ class Site:
         d = self.gate.start(raw, visitor)
         if not d.ok:
             return {"ok": False, "code": d.code, "message": d.message, "video": d.video}
-        self.gate.store.update(f"raw_events/{safe_id(event_id)}.json", lambda cur: (raw, None))
-        if os.environ.get("STRINGER_JOB"):
-            cloud.start_job(cloud.setting("STRINGER_PROJECT"), cloud.setting("STRINGER_REGION", "us-east1"),
-                            cloud.setting("STRINGER_JOB"), [event_id])
-        else:
-            threading.Thread(target=self._make_here, args=(raw, d.ticket), daemon=True).start()
+        try:
+            self.gate.store.update(f"raw_events/{safe_id(event_id)}.json", lambda cur: (raw, None))
+            if os.environ.get("STRINGER_JOB"):
+                cloud.start_job(cloud.setting("STRINGER_PROJECT"), cloud.setting("STRINGER_REGION", "us-east1"),
+                                cloud.setting("STRINGER_JOB"), [event_id])
+            else:
+                threading.Thread(target=self._make_here, args=(raw, d.ticket), daemon=True).start()
+        except Exception as e:
+            # The video never began. Give the click back (the claim, the slot, the day's and the visitor's
+            # count), or the event would show "being made" for 20 minutes with nothing running.
+            print(f"could not start the video for {safe_id(event_id)}: {e!r}"[:300])
+            d.ticket.cancel(f"the job could not be started: {e!r}")
+            return {"ok": False, "code": "start_failed", "message": "The video couldn't be started. Please try again."}
         return {"ok": True, "code": "making", "message": "Making the video. This takes a few minutes."}
 
     def _make_here(self, raw: dict, ticket) -> None:
         try:
             rec = pipeline.run(raw, ticket)
-        except TooCostly as e:
+        except (TooCostly, VideoOverBudget) as e:
             ticket.finish(no_video=f"too costly: {e}")
             return
         except Exception as e:
@@ -111,6 +134,8 @@ class Site:
             return
         if rec["outcome"] == "done":
             ticket.finish(video=dict(rec["video"], seconds=rec["seconds"], usd=rec["usd"]))
+        elif rec["outcome"] == "planned":
+            ticket.cancel("a plan-only run")
         else:
             ticket.finish(no_video=rec["why"])
 
@@ -151,8 +176,10 @@ const act = (li, st) => {{
   if (st.state === 'done' && st.video && st.video.url) {{
     const v = document.createElement('video'); v.controls = true; v.src = st.video.url;
     if (st.video.poster) v.poster = st.video.poster; a.append(v); return; }}
-  if (st.state === 'making') {{ a.textContent = 'Making the video…'; setTimeout(() => poll(li), 5000); return; }}
+  if (st.state === 'making') {{ a.textContent = 'Making the video…'; setTimeout(() => poll(li), 2000); return; }}
   if (st.state === 'no_video') {{ a.textContent = 'No video: ' + (st.why || ''); return; }}
+  if (st.state === 'unavailable') {{ a.textContent = "This story isn't available for a video."; return; }}
+  if (st.failed) {{ const n = document.createElement('div'); n.textContent = "The last try didn't finish. You can try again."; a.append(n); }}
   const b = document.createElement('button'); b.textContent = 'Make video';
   b.onclick = async () => {{
     b.disabled = true;
@@ -195,7 +222,8 @@ def handler_for(site: Site):
 
         def _media(self, name: str) -> None:
             bucket = os.environ.get("STRINGER_VIDEO_BUCKET")
-            if not bucket or not MEDIA.fullmatch(name):
+            # only the files of a video its event shows right now: not a taken-down or replaced one's
+            if not bucket or not MEDIA.fullmatch(name) or not site.may_watch(name):
                 return self._send(404, "not found", "text/plain")
             r = cloud.open_object(bucket, name, self.headers.get("Range"))
             try:
@@ -225,7 +253,10 @@ def handler_for(site: Site):
             if u.path.startswith("/media/"):
                 return self._media(u.path[len("/media/"):])
             if u.path == "/status" and q.get("event"):
-                return self._json(site.record(q["event"][0]))
+                try:
+                    return self._json(site.record(q["event"][0]))
+                except ValueError:                       # not an event id at all
+                    return self._send(400, "bad event id", "text/plain")
             if u.path == "/":
                 site.fresh()
                 return self._send(200, site.page(), "text/html; charset=utf-8", visitor if new else None)

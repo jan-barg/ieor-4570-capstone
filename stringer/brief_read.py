@@ -19,7 +19,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from . import clean
+from . import calls, clean
 
 VERSION = "read-2"          # read-2: non-breaking hyphens and thin spaces count as typography
 KINDS = ("event", "number", "statement", "reaction", "background")
@@ -27,9 +27,10 @@ MAX_FACTS = 15
 MAX_TOKENS = 16000          # thinking counts toward this on Haiku; 2,000 was too few in the menu test
 TEXT_CHARS = 40000          # about 10,000 tokens; longer cleaned texts are cut (and the cut is recorded)
 MIN_QUOTE_WORDS = 4
+MIN_QUOTE_CHARS = 8        # the same floor for scripts written without spaces (Chinese, Japanese, Thai)
 CALL_TIMEOUT_S = 45        # a call normally takes 5-15 s; DeepSeek once hung for 600 s, and on Nov 27 a live
                            # call hung until the old 180 s limit. The JSON retry follows a timed-out call.
-WORKERS = 8                # articles read side by side after the first
+WORKERS = 12               # articles read side by side: all of a story's picked articles at once (at most 10)
 
 SCHEMA = {"type": "json_schema", "json_schema": {"name": "article_facts", "strict": True, "schema": {
     "type": "object", "additionalProperties": False,
@@ -116,10 +117,21 @@ def norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").translate(_SAME)).strip()
 
 
+_NO_SPACES = re.compile(r"[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff]")   # Thai, Japanese kana, Chinese characters
+
+
+def long_enough(q: str) -> bool:
+    """At least MIN_QUOTE_WORDS words; for a script written without spaces, MIN_QUOTE_CHARS characters
+    (counting words by spaces made every Chinese or Thai quote "one word", so all its facts were dropped)."""
+    if _NO_SPACES.search(q):
+        return len(re.sub(r"\s", "", q)) >= MIN_QUOTE_CHARS
+    return len(q.split()) >= MIN_QUOTE_WORDS
+
+
 def find_quote(quote: str, text_norm: str) -> int:
     """Position of the quote in the normalized article text, or -1. Too-short quotes never match."""
     q = norm(quote).strip(" .,;:\"'")
-    if len(q.split()) < MIN_QUOTE_WORDS:
+    if not long_enough(q):
         return -1
     return text_norm.find(q)
 
@@ -145,15 +157,7 @@ def _parse(text: str) -> dict | None:
     return d
 
 
-def _call(complete, messages, params, name):
-    """One call; a failed call (timeout, provider error) counts as an empty answer. The eval's cost
-    cap is the one error that must stop the run, so it passes through."""
-    try:
-        return complete(messages, name=name, **params).text or "", None
-    except Exception as e:
-        if type(e).__name__ == "BudgetExceeded":
-            raise
-        return "", f"{type(e).__name__}: {e}"[:300]
+_call = calls.call      # one call; a failed call counts as an empty answer (stringer/calls.py)
 
 
 def _ask(complete, messages, params, name):
@@ -235,14 +239,15 @@ def read_article(event: dict, article: dict, complete, *, model: str = "", name:
 
 
 def read_story(event: dict, articles: list[dict], complete, *, model: str = "", workers: int = WORKERS) -> dict:
-    """Step 1 for one story: every full-text article. The first is read alone so the shared instructions
-    are in the provider's cache, then the rest side by side (map, prompt caching: fan-out). Nov 27: read
-    one after another, a live story's 10-12 articles took a minute of the 5 a grader waits."""
+    """Step 1 for one story: every full-text article, all side by side, in the order given.
+
+    Until Nov 27 the first article was read alone, to put the shared instructions in the provider's cache
+    before the rest. The live call log showed that bought nothing: all 26 side-by-side reads in three runs
+    came back with 0 cached tokens (the shared part of a 1-2k token prompt is too short to cache), while
+    the wait cost about 8 s of the 5 minutes a viewer waits."""
     todo = [a for a in articles if a.get("text_status") == "full"]
     read = lambda a: read_article(event, a, complete, model=model)
-    rows = [read(a) for a in todo[:1]]
-    if len(todo) > 1:
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-            rows += list(ex.map(read, todo[1:]))
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(todo) or 1))) as ex:
+        rows = list(ex.map(read, todo))
     return dict(version=VERSION, articles=rows, facts=sum(len(r["facts"]) for r in rows),
                 failed=[r["article"] for r in rows if r["checks"]["error"]])

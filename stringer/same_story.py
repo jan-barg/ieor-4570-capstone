@@ -44,6 +44,7 @@ BATCH = 25
 WORKERS = 4              # a story's batches are judged side by side (Nov 27, the live run's 5-minute budget)
 OPENING_CHARS = 600
 MAX_TOKENS = 8000            # per batch call; thinking models count their thinking here too
+CALL_TIMEOUT_S = 60          # a batch answers in 6-7 s (Nov 27 live runs); with no limit LiteLLM waits 6,000 s
 SIDE_DROP_GAP = 0.30         # flag when one side's drop share is this much above the other's
 SIDE_MIN = 4                 # ...and both sides had at least this many judged articles
 
@@ -265,18 +266,30 @@ def plan_story(event: dict, articles: list[dict], batch: int = BATCH, prompt: st
         ids = {f"A{i + 1}": a["id"] for i, a in enumerate(chunk)}
         packets = [article_packet(a, start, pid) for pid, a in zip(ids, chunk)]
         calls.append({"messages": messages_for(event, packets, prompt=prompt), "ids": ids, "packets": packets,
-                      "params": {"max_tokens": MAX_TOKENS}, "expect_output": 35 * len(chunk) + 30})
+                      "params": {"max_tokens": MAX_TOKENS, "timeout": CALL_TIMEOUT_S},
+                      "expect_output": 35 * len(chunk) + 30})
     return calls
 
 
 def _judge(event, packets, ids, complete, kind, name, prompt=None):
-    """One call plus one retry for whatever didn't come back. Returns {packet id: verdict}, problems."""
-    r = complete(messages_for(event, packets, kind, prompt=prompt), name=name, max_tokens=MAX_TOKENS)
-    got, problems = parse_verdicts(r.text, list(ids))
+    """One call plus one retry for whatever didn't come back. Returns {packet id: verdict}, problems.
+    A first call that fails or runs out of time counts as an empty answer, so every item is asked again.
+    If the retry fails too, the error goes up: the run stops as a failure that can be tried again, since
+    going on would let unjudged articles through as if they were on the story."""
+    failed = []
+    try:
+        text = complete(messages_for(event, packets, kind, prompt=prompt), name=name, max_tokens=MAX_TOKENS,
+                        timeout=CALL_TIMEOUT_S).text
+    except Exception as e:
+        if type(e).__name__ == "BudgetExceeded":      # an eval's or a run's cost cap must stop the run
+            raise
+        text, failed = "", [f"call failed: {type(e).__name__}: {e}"[:200]]
+    got, problems = parse_verdicts(text, list(ids))
+    problems = failed or problems
     missing = [p for p in packets if p["id"] not in got]
     if missing:
         r2 = complete(messages_for(event, missing, kind, retry=True, prompt=prompt), name=f"{name} retry",
-                      max_tokens=MAX_TOKENS)
+                      max_tokens=MAX_TOKENS, timeout=CALL_TIMEOUT_S)
         again, p2 = parse_verdicts(r2.text, [p["id"] for p in missing])
         got.update(again)
         problems += [f"retry: {p}" for p in p2]

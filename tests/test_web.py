@@ -90,14 +90,51 @@ def test_job_records_site_paths(monkeypatch, tmp_path):
     out.mkdir()
     for f in ("video.mp4", "poster.jpg"):
         (out / f).write_bytes(b"x")
-    (tmp_path / "script.json").write_text("{}")
     sent = []
     monkeypatch.setenv("STRINGER_VIDEO_BUCKET", "vids")
-    monkeypatch.setenv("STRINGER_PRIVATE_BUCKET", "priv")
     monkeypatch.setattr(run_job.cloud, "upload", lambda b, n, p, **kw: sent.append((b, n)) or "")
     rec = {"video": {"mp4": str(out / "video.mp4"), "duration_s": 60.0}, "seconds": 200.0, "usd": 0.5}
-    v = run_job.upload_outputs(tmp_path, rec, EVENT["id"], "T1")
+    v = run_job.upload_media(rec, EVENT["id"], "T1")
     assert v["url"] == f"/media/videos/{EVENT['id']}/T1/video.mp4" and server.MEDIA.fullmatch(v["url"][7:])
     assert v["poster"].endswith("/poster.jpg") and v["captions"] is None
-    assert ("priv", f"stories/{EVENT['id']}/T1/script.json") in sent
-    assert all(b == "vids" for b, n in sent if n.startswith("videos/"))
+    assert sent and all(b == "vids" and n.startswith("videos/") for b, n in sent)
+
+
+def test_a_job_that_cannot_start_gives_the_click_back(monkeypatch):
+    s, _ = site(monkeypatch)
+    s.refresh()
+    monkeypatch.setenv("STRINGER_JOB", "stringer-make")
+    monkeypatch.setenv("STRINGER_PROJECT", "made-up-project")
+
+    def no_start(*a, **kw):
+        raise ConnectionError("Cloud Run did not answer")
+    monkeypatch.setattr(server.cloud, "start_job", no_start)
+    r = s.make(EVENT["id"], "visitor-1")
+    assert r == {"ok": False, "code": "start_failed", "message": "The video couldn't be started. Please try again."}
+    st = s.gate.status()
+    assert st["videos_today"] == 0 and st["being_made"] == 0                   # nothing was used up
+    assert s.record(EVENT["id"])["state"] is None                              # not "making": the button is back
+    started = []
+    monkeypatch.setattr(server.cloud, "start_job", lambda *a, **kw: started.append(a) or "op")
+    assert s.make(EVENT["id"], "visitor-1")["ok"] and len(started) == 1        # and the same visitor can click again
+
+
+def test_a_crashed_run_shows_the_button_again_and_a_taken_down_video_is_not_served(monkeypatch):
+    import datetime as dt
+    now = [dt.datetime(2026, 12, 9, 15, 0, tzinfo=dt.timezone.utc)]
+    monkeypatch.delenv("STRINGER_JOB", raising=False)
+    g = Gate(MemoryStore(), complete=None, model="", tavily_left=lambda: 500, now=lambda: now[0])
+    s = server.Site(gate=g, fetch=lambda: [EVENT])
+    eid = EVENT["id"]
+    t = g.start(EVENT, "visitor-1").ticket                    # a run that then dies without a word
+    assert s.record(eid)["state"] == "making"
+    now[0] += dt.timedelta(minutes=25)
+    assert s.record(eid) == {"state": None, "video": None, "why": None, "failed": True}
+    t2 = g.start(EVENT, "visitor-2").ticket
+    path = f"videos/{eid}/{t2.id}/video.mp4"
+    t2.finish(video={"url": "/media/" + path})
+    assert s.record(eid)["state"] == "done" and s.may_watch(path)
+    g.take_down(eid, by="jan")
+    s._watch.clear()                                          # (the 30-second memory of the last answer)
+    assert s.record(eid) == {"state": "unavailable", "video": None, "why": None, "failed": False}
+    assert not s.may_watch(path) and not s.may_watch(f"videos/{eid}/{t.id}/video.mp4")

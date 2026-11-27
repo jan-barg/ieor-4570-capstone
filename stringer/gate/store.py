@@ -160,6 +160,8 @@ class GCSStore(Store):
 
     API = "https://storage.googleapis.com/storage/v1/b/{bucket}/o"
     UPLOAD = "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o"
+    BUSY = (429, 500, 502, 503, 504)     # "try again shortly": the request was not carried out
+    TRIES = 3
 
     def __init__(self, bucket: str, prefix: str = "gate/", session=None, timeout: float = 15.0):
         self.bucket = bucket
@@ -179,9 +181,29 @@ class GCSStore(Store):
     def _name(self, key: str) -> str:
         return self.prefix + key
 
+    def _send(self, method: str, url: str, *, reading: bool, **kw):
+        """One request, tried again after a short pause when Cloud Storage says it is busy. Before this
+        (Nov 27 review) one 503 inside a running video's heartbeat ended the whole paid run.
+        A read is also tried again after a network error. A write is not: the write may have landed, and
+        sending it again would be refused as a conflict, which update() would answer by applying the
+        change a second time (counting a video twice)."""
+        last = None
+        for attempt in range(self.TRIES):
+            try:
+                r = getattr(self.session, method)(url, timeout=self.timeout, **kw)
+            except Exception as e:
+                if not reading or attempt == self.TRIES - 1:
+                    raise
+                last = e
+            else:
+                if r.status_code not in self.BUSY or attempt == self.TRIES - 1:
+                    return r
+            time.sleep(0.3 * (attempt + 1) * (1 + random.random()))
+        raise last          # not reached: the loop returns or raises on its last try
+
     def get(self, key):
         url = self.API.format(bucket=self.bucket) + "/" + quote(self._name(key), safe="")
-        r = self.session.get(url, params={"alt": "media"}, timeout=self.timeout)
+        r = self._send("get", url, reading=True, params={"alt": "media"})
         if r.status_code == 404:
             return None, None
         r.raise_for_status()
@@ -190,9 +212,8 @@ class GCSStore(Store):
     def put(self, key, value, version):
         body = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
         params = {"uploadType": "media", "name": self._name(key), "ifGenerationMatch": version or "0"}
-        r = self.session.post(self.UPLOAD.format(bucket=self.bucket), params=params, data=body,
-                              headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
-                              timeout=self.timeout)
+        r = self._send("post", self.UPLOAD.format(bucket=self.bucket), reading=False, params=params, data=body,
+                       headers={"Content-Type": "application/json", "Cache-Control": "no-store"})
         if r.status_code in (409, 412):
             raise Conflict(f"{key}: changed since version {version}")
         r.raise_for_status()
@@ -204,7 +225,7 @@ class GCSStore(Store):
             params = {"prefix": self._name(prefix), "fields": "items(name),nextPageToken"}
             if token:
                 params["pageToken"] = token
-            r = self.session.get(self.API.format(bucket=self.bucket), params=params, timeout=self.timeout)
+            r = self._send("get", self.API.format(bucket=self.bucket), reading=True, params=params)
             r.raise_for_status()
             d = r.json()
             out += [i["name"][len(self.prefix):] for i in d.get("items") or []]

@@ -1,6 +1,9 @@
 """Module 5, step 2: merge step 1's fact cards into claims.
 
-One call per story (stronger model). It gets the event and the fact cards from step 1 (about 130 a
+One merge call per story, on the same model as step 1 (config/models.toml), then up to four short calls
+that only mark things on its claims: a retry for cards it left out, a conflict finder, a check of the
+conflict pairs, and a check of the merge call's own conflict marks (merge_claims, mark_conflicts).
+The merge call gets the event and the fact cards from step 1 (about 130 a
 story at 10 articles): each card's sentence, kind, who says so and its English quote, grouped by
 article under a number. No article text, no outlet names, no sides (decided Nov 24), so it can't
 favour one side's version.
@@ -921,10 +924,26 @@ def check(d: dict, cards: list[dict]) -> tuple[list, list, list, dict]:
 
 # ---- one story ------------------------------------------------------------------------------------------
 
+def claims_final_after_merge(prompt: str = VERSION) -> bool:
+    """True when nothing after the merge call (and its retry) adds, drops or rewords a claim: the later
+    calls only mark conflicts and updates on the claims. False for the join versions (merge-12, merge-13).
+    When true, work that reads only the claims' words and cards (the fact check's judge, the blindspot
+    judge, framing) can start as soon as merge_claims() returns, beside mark_conflicts()."""
+    return prompt not in JOIN
+
+
 def merge_story(event: dict, step1: dict, complete, *, model: str = "", name: str = "brief_merge",
                 prompt: str = VERSION, times: dict | None = None) -> dict:
     """Step 2 for one story, from step 1's output for it (read_story's result). times maps article id ->
-    published time; the conflict pass shows it from merge-8."""
+    published time; the conflict pass shows it from merge-8. The two halves, for callers that run other
+    work beside the second: merge_claims(), then mark_conflicts()."""
+    out = merge_claims(event, step1, complete, model=model, name=name, prompt=prompt, times=times)
+    return mark_conflicts(event, out, complete, model=model, prompt=prompt, times=times)
+
+
+def merge_claims(event: dict, step1: dict, complete, *, model: str = "", name: str = "brief_merge",
+                 prompt: str = VERSION, times: dict | None = None) -> dict:
+    """The merge call, with its retry for left-out cards: the claims with their cards."""
     cards = cards_of(step1)
     out = dict(version=prompt, claims=[], dropped=[], unused=[],
                checks=dict(calls=0, retried_json=False, call_errors=[], error=None, cards=len(cards)))
@@ -951,6 +970,15 @@ def merge_story(event: dict, step1: dict, complete, *, model: str = "", name: st
             if len(un2) < len(out["unused"]):           # keep the answer that leaves fewer cards out
                 out["claims"], out["dropped"], out["unused"] = k2, dr2, un2
                 ch.update(c2)
+    return out
+
+
+def mark_conflicts(event: dict, out: dict, complete, *, model: str = "", prompt: str = VERSION,
+                   times: dict | None = None) -> dict:
+    """Everything after the merge call, on merge_claims()'s output (changed in place and returned): the
+    conflict pass, the check of its pairs and of the merge call's own marks, and for the two join
+    versions the join. From merge-14 on it only sets conflicts_with on claims and adds updates."""
+    ch = out["checks"]
     if prompt in CONFLICT_PASS and len(out["claims"]) > 1:
         if CONFLICT_PASS[prompt] == 4:
             points, n3, err3 = find_points(event, out["claims"], complete, model=model, times=times)

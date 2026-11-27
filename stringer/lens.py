@@ -14,7 +14,8 @@ How (decided Nov 26, Jan, design page "Choosing a story's sides"):
      too the plain-code rule below decides.
   2. Code checks the answer: outlet ids not in the table are dropped, a side with nothing on file
      keeps its name and gets a flag, two sides sharing outlets are flagged. New sides are never
-     written into side_lists.csv; a live run saves them to a review file for Jan (record_new_sides).
+     written into side_lists.csv; a live run saves them to a review file for Jan (record_new_sides;
+     on the Mac only: on Cloud Run the story's lens.json, kept in the private bucket, holds the same).
   3. The plain-code rule (also the eval's free baseline): a US story is left against right; a
      country with a ready-made pair of side lists gets that pair; anything else has no split and
      searches its own country's press.
@@ -29,7 +30,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from . import models, paths
+from . import calls, models, paths
 from .events import Event
 from .gather.sides import Lens, Side, local_press, side_lists, us_sides
 from .outlets import OutletTable
@@ -156,10 +157,6 @@ def list_pairs(path=None) -> list[tuple[str, str]]:
 def majority_country(t: OutletTable, side: Side) -> str:
     c = Counter(t.by_id[i].country for i in side.outlet_ids if i in t.by_id)
     return c.most_common(1)[0][0] if c else ""
-
-
-def countries_on_file(t: OutletTable) -> set[str]:
-    return {o.country for o in t.outlets if o.country and o.kind in MENU_KINDS}
 
 
 def menu_lists(t: OutletTable, lists: dict[str, Side]) -> str:
@@ -334,14 +331,7 @@ def rule_lens(ev: Event, t: OutletTable, lists: dict[str, Side], pairs=None, sou
 
 # ---- choosing -------------------------------------------------------------------------------------
 
-def _call(complete, messages, params, name):
-    """One call; a failed call counts as an empty answer. The eval's cost cap passes through."""
-    try:
-        return complete(messages, name=name, **params).text or "", None
-    except Exception as e:
-        if type(e).__name__ == "BudgetExceeded":
-            raise
-        return "", f"{type(e).__name__}: {e}"[:300]
+_call = calls.call      # one call; a failed call counts as an empty answer (stringer/calls.py)
 
 
 def choose(ev: Event, t: OutletTable, complete=None, *, model: str = "", hide=(), lists=None, pairs=None,
@@ -393,12 +383,8 @@ def record_of(lens: Lens) -> dict:
 
 
 def live_complete(step: str = "lens", trace_id=None, metadata=None, model: str | None = None):
-    """A `complete` for live runs: models.complete with the model the step names in models.toml
-    (or `model`, an alias, instead)."""
-    def complete(messages, name=None, **params):
-        return models.complete(step, messages, model=model, trace_id=trace_id, name=name, metadata=metadata,
-                               **params)
-    return complete
+    """A `complete` for live runs of this step (calls.live_complete with this module's step as the default)."""
+    return calls.live_complete(step, trace_id=trace_id, metadata=metadata, model=model)
 
 
 def record_new_sides(ev: Event, lens: Lens, path=None) -> int:

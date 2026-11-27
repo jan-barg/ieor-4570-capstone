@@ -31,9 +31,11 @@ from __future__ import annotations
 import json
 import math
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import brief_read, fact_check, shots, story_file
+from .outlets import LOW_RELIABILITY
 
 VERSION = "script-2"   # script-2 (Nov 26): the line check accepts a checked claim's own wording (Jan: "Yes, loosen it")
 MAX_TOKENS = 48000          # the answer is 2,000-4,000 tokens, but thinking counts toward this: Haiku used all of 16,000 (Nov 26)
@@ -65,6 +67,7 @@ def banned_verb(text: str) -> str | None:
     return None
 HEDGES = ("may change", "may still change", "could change", "still developing", "still coming in", "may be updated")
 ESSENTIAL = ("hook", "sides", "sources")
+NO_CLAIMS, NO_WRITER = "no kept claims", "no usable answer from the writer"     # two of the "no video" reasons
 AI_MARK = "Made with AI from {n} news articles"
 
 
@@ -596,7 +599,7 @@ def plain_allowed(cited: list[dict], p: dict) -> bool:
                 groups.remove(x)
                 g |= x
             groups.append(g)
-    rated = any(((p["sources"].get(a) or {}).get("reliability") or 0) >= 0.5 for c in cited for a in c.get("articles") or [])
+    rated = any(((p["sources"].get(a) or {}).get("reliability") or 0) >= LOW_RELIABILITY for c in cited for a in c.get("articles") or [])
     return len(groups) >= 2 and rated
 
 
@@ -1185,12 +1188,19 @@ def _fix_text(probs: list[dict]) -> str:
 
 def check_all(script: dict, p: dict, facts: list[dict], contexts: dict, complete, *, line_model: str, words_model: str,
               known_lines=None, known_words=None) -> dict:
-    """Code rules, the line check and the loaded-words check on one draft."""
+    """Code rules, the line check and the loaded-words check on one draft. The two model checks read
+    the same draft and not each other, so they run side by side."""
     code = code_problems(script, p)
-    lc = line_check(script, p, facts, contexts, complete, model=line_model, known=known_lines)
-    wc = words_check(script, p, complete, model=words_model, known=known_words)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_line = ex.submit(line_check, script, p, facts, contexts, complete, model=line_model, known=known_lines)
+        f_words = ex.submit(words_check, script, p, complete, model=words_model, known=known_words)
+    lc, wc = f_line.result(), f_words.result()
+    warn = warnings(script, p)
+    if wc["failed"]:
+        warn = warn + [dict(beat=None, rule="loaded words", what="the loaded-words check gave no usable answer, so "
+                                                               "the wording of these lines was not checked")]
     return dict(code=code, line=lc, words=wc, problems=code + line_problems(script, p, lc) + words_problems(wc),
-                warnings=warnings(script, p))
+                warnings=warn)
 
 
 def _known(script: dict, chk: dict) -> tuple[dict, dict]:
@@ -1320,12 +1330,12 @@ def write_script(sf: dict, facts: list[dict], articles: dict | list, complete, *
                kept_claims=len(p["claims"]), quotes=len(p["quotes"]), points=len(p["points"]))
     calls = dict(writer=0, line=0, words=0)
     if not p["claims"]:
-        return _finish(rec, sf, p, None, None, None, [], "no kept claims", calls, [], c0, cost)
+        return _finish(rec, sf, p, None, None, None, [], NO_CLAIMS, calls, [], c0, cost)
     msgs = messages_for(p)
     draft, text, errs, n = ask_writer(msgs, p, complete, model)
     calls["writer"] += n
     if draft is None:
-        return _finish(rec, sf, p, None, None, None, [], "no usable answer from the writer", calls, errs, c0, cost)
+        return _finish(rec, sf, p, None, None, None, [], NO_WRITER, calls, errs, c0, cost)
     kw = dict(line_model=line_model, words_model=words_model)
     first = check_all(draft, p, facts, contexts, complete, **kw)
     calls["line"] += first["line"]["calls"]
@@ -1350,9 +1360,36 @@ def write_script(sf: dict, facts: list[dict], articles: dict | list, complete, *
                    draft=draft, final_draft=final_script)
 
 
+def breakdown(sf: dict, final: dict | None, no_video: str | None) -> str:
+    """Why a "no video" is a breakdown and not a judgment about the story: a model gave no usable answer
+    (an outage, a timeout). "" when the story itself is the reason. It matters because the Gate keeps a
+    judgment for good, while a breakdown should be something a later click can try again.
+
+    Example: the writer's host is down for two minutes. Without this, every story started in those two
+    minutes would be recorded as "no video" and never offered again."""
+    if not no_video:
+        return ""
+    if no_video == NO_WRITER:
+        return "the script writer gave no usable answer"
+    if no_video == NO_CLAIMS:
+        claims = sf.get("claims") or []
+        unchecked = sum(c.get("status") == "unchecked" for c in claims)
+        if unchecked:
+            return f"the fact check gave no answer for {unchecked} of {len(claims)} claims"
+        errors = (sf.get("meta") or {}).get("errors") or []
+        if not claims and errors:
+            return "the news brief has no claims because a step failed: " + str(errors[0])[:200]
+        return ""
+    missing = ((final or {}).get("line") or {}).get("missing") or []
+    if missing:
+        return f"the line check gave no answer for {len(missing)} line(s)"
+    return ""
+
+
 def _finish(rec, sf, p, script, first, final, cuts, no_video, calls, errors, c0, cost, draft=None, final_draft=None) -> dict:
     status = "no video" if (no_video or script is None) else ("ok with cuts" if cuts else "ok")
-    rec.update(status=status, reason=no_video or ("" if not cuts else f"{len(cuts)} beat(s) cut or simplified"))
+    rec.update(status=status, reason=no_video or ("" if not cuts else f"{len(cuts)} beat(s) cut or simplified"),
+               broke=breakdown(sf, final, no_video) if status == "no video" else "")
     if script is not None and status != "no video":
         beats = [_beat_out(n, b, p, final or {}) for n, b in enumerate(script["beats"], 1)]
     else:

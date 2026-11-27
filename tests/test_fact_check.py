@@ -312,3 +312,28 @@ def test_input_story_file_is_not_changed():
     before = json.dumps(sf, sort_keys=True)
     fact_check.check_story(sf, FACTS, ARTICLES, fake_judge({"C1": dict(bad_cards=["K2"])}), model="fake", table=Table())
     assert json.dumps(sf, sort_keys=True) == before
+
+
+def test_state_run_outlets_are_named_as_such_at_every_state_level():
+    src = {"a": dict(outlet_name="Xin Wire", state_media="Captured Public"),
+           "b": dict(outlet_name="Tas Agency", state_media="Captured Private"),
+           "c": dict(outlet_name="Public Radio", state_media="Independent Public"),
+           "d": dict(outlet_name="Daily", state_media=None)}
+    assert fact_check._outlets(["a"], src) == "Xin Wire (state-controlled media)"
+    assert fact_check._outlets(["b", "c"], src) == "Tas Agency (state-controlled media) and Public Radio"
+    assert fact_check._outlets(["d"], src) == "Daily"
+
+
+def test_a_judge_run_early_gives_the_same_checked_file_and_no_second_model_call():
+    sf = story([claim("C1", "A truck driver was hurt.", "a_n2#1"), claim("C2", "Ferries will run.", "a_l1#1")])
+    log = []
+    answers = {"C1": dict(verdict="not backed", problem="number", why="no")}
+    _, plain = fact_check.check_story(sf, FACTS, ARTICLES, fake_judge(answers), model="fake", table=Table())
+    early = fact_check.judge_early(sf, FACTS, ARTICLES, fake_judge(answers, log=log), model="fake", table=Table())
+    n = len(log)
+    _, late = fact_check.check_story(sf, FACTS, ARTICLES, fake_judge(answers, log=log), model="fake", table=Table(),
+                                     judged=early)
+    assert len(log) == n and n >= 1                                    # check_story made no call of its own
+    assert [(c["id"], c["status"], c["reason"]) for c in late["claims"]] == \
+           [(c["id"], c["status"], c["reason"]) for c in plain["claims"]]
+    assert late["fact_check"]["model"] == "fake" and late["fact_check"]["calls"] == plain["fact_check"]["calls"]

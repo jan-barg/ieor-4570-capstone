@@ -152,3 +152,25 @@ def test_a_timeout_does_not_change_the_cache_key():
     from stringer.evals.cache import call_key
     m = [{"role": "user", "content": "x"}]
     assert call_key("m", m, {"max_tokens": 5, "timeout": 180}) == call_key("m", m, {"max_tokens": 5})
+
+
+def test_every_article_is_read_side_by_side_in_the_order_given():
+    import threading
+    gate, seen = threading.Barrier(3, timeout=5), []
+
+    def complete(messages, name=None, **params):
+        seen.append(threading.current_thread().name)
+        gate.wait()                      # passes only if three reads are in flight at the same time
+        return SimpleNamespace(text=answer([GOOD]))
+    arts = [dict(ART, id=f"a_{i}") for i in range(3)] + [dict(ART, id="a_snip", text_status="snippet_only")]
+    out = brief_read.read_story(EVENT, arts, complete)
+    assert [r["article"] for r in out["articles"]] == ["a_0", "a_1", "a_2"] and out["facts"] == 3
+    assert len(set(seen)) == 3 and out["failed"] == []
+
+
+def test_quotes_in_scripts_without_spaces_can_match():
+    text = "市政府周五宣布，暴风雨损坏了两根桥墩后，河上的大桥已经关闭。市长说工程师签字之前不会重新开放。"
+    quote = "暴风雨损坏了两根桥墩后，河上的大桥已经关闭"
+    assert brief_read.find_quote(quote, brief_read.norm(text)) >= 0
+    assert brief_read.find_quote("大桥", brief_read.norm(text)) == -1                # still too short
+    assert brief_read.find_quote("the bridge", "the bridge was closed") == -1        # two English words: too short

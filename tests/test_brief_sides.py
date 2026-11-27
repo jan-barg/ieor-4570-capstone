@@ -73,6 +73,16 @@ def test_a_thin_side_gets_no_blindspots_and_a_flag():
     assert len(f) == 1 and f[0]["side"] == "south" and f[0]["reader"] == "step 3" and "1 article" in f[0]["detail"]
 
 
+def test_an_article_step_1_failed_on_does_not_count_as_read():
+    s1 = step1()
+    s1["articles"][3]["checks"] = {"error": "no usable answer after one retry"}        # a_s2: sent, not read
+    out = run(s1=s1)
+    src = {x["id"]: x for x in out["sources"]}
+    assert src["a_s2"]["read"] is False and src["a_s1"]["read"] is True
+    assert out["counts"]["articles_read"] == 5 and out["counts"]["read_B"] == 1
+    assert [x["side"] for x in out["flags"] if x["code"] == "thin side"] == ["south"]
+
+
 def test_an_empty_side_is_flagged_for_step_4_and_the_video():
     out = run(s1=step1(("a_n1", "a_n2", "a_w1", "a_x1", "a_s9")))
     codes = [x["code"] for x in out["flags"]]
@@ -123,7 +133,7 @@ def test_story_flags_developing_and_too_few_articles():
     out = run(event={"confidence": "45"}, s1=step1(("a_n1", "a_s1", "a_w1")))
     codes = {x["code"]: x for x in out["flags"]}
     assert "developing" in codes and "45" in codes["developing"]["detail"] and codes["developing"]["reader"] == "the script writer"
-    assert codes["too few articles"]["detail"].startswith("3 articles read") and codes["too few articles"]["action"] == "no video"
+    assert codes["too few articles"]["detail"].startswith("3 articles read") and "still made" in codes["too few articles"]["action"]
     assert "developing" not in {x["code"] for x in run()["flags"]}
 
 

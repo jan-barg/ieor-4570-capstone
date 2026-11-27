@@ -113,14 +113,6 @@ def path_folders(path: str) -> list[str]:
     return [s.lower() for s in segs[:-1]]
 
 
-def url_key(url: str) -> str:
-    """The URL without query string or fragment, for merging duplicates."""
-    p = urlsplit(url.strip())
-    host = clean_host(p.hostname or "")
-    path = p.path.rstrip("/") or "/"
-    return f"{host}{path}"
-
-
 class OutletTable:
     def __init__(self, outlets: list[Outlet]):
         self.outlets = outlets
@@ -243,7 +235,3 @@ def table() -> OutletTable:
     if _TABLE is None:
         _TABLE = OutletTable.load()
     return _TABLE
-
-
-def label(url: str) -> dict:
-    return table().label(url)

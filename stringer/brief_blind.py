@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from . import brief_read
 from .brief_read import find_quote, headline, norm, shown_text
@@ -273,14 +274,32 @@ def judge_side(event: dict, cand: dict, claims: dict, arts: list[dict], outlets:
 def judge_blindspots(sides: dict, articles: list[dict], event: dict, complete, *, model: str = "",
                      name: str = "brief_blind", prompt: str = VERSION) -> dict:
     """Step 3's output with each checked side's results, the confirmed blindspots and counts added."""
-    out = dict(sides)
+    return with_judged(sides, judge_sides(sides, articles, event, complete, model=model, name=name, prompt=prompt),
+                       prompt=prompt)
+
+
+def judge_sides(sides: dict, articles: list[dict], event: dict, complete, *, model: str = "",
+                name: str = "brief_blind", prompt: str = VERSION) -> list[dict]:
+    """The judge's calls: one result per silent side, in candidates() order. The two sides don't read each
+    other's answers, so they are asked side by side."""
     claims = {c["id"]: c for c in sides.get("claims") or []}
     outlets = {s["id"]: s.get("outlet_name") or s.get("outlet") or s["id"] for s in sides.get("sources") or []}
-    judged = []
-    for cand in candidates(sides):
+    cands = candidates(sides)
+
+    def one(cand):
         arts = silent_articles(sides, articles, cand["silent_side"])
-        judged.append(judge_side(event, cand, claims, arts, outlets, complete, model=model,
-                                 name=f"{name} {cand['silent_side']}", prompt=prompt))
+        return judge_side(event, cand, claims, arts, outlets, complete, model=model,
+                          name=f"{name} {cand['silent_side']}", prompt=prompt)
+    if len(cands) < 2:
+        return [one(c) for c in cands]
+    with ThreadPoolExecutor(max_workers=len(cands)) as ex:
+        return list(ex.map(one, cands))
+
+
+def with_judged(sides: dict, judged: list[dict], *, prompt: str = VERSION) -> dict:
+    """Step 3's output with judge_sides()'s results joined in. `sides` may be a later copy of step 3's
+    output than the one the judge read (same claims, with conflict marks added since)."""
+    out = dict(sides)
     status = {}
     for j in judged:
         for r in j["checked"]:

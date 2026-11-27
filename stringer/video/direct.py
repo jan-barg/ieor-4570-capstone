@@ -153,10 +153,11 @@ def _parse(text: str) -> dict[int, str] | None:
     return out or None
 
 
-def model_call(messages, name=None, model=None, **params):
+def model_call(messages, name=None, model=None, trace_id=None, **params):
     """The live call: models.complete with the model config/models.toml names for this step."""
     from .. import models
-    return models.complete(STEP, messages, model=model, name=name, metadata=dict(module=8), **params)
+    return models.complete(STEP, messages, model=model, name=name, metadata=dict(module=8), trace_id=trace_id,
+                           **params)
 
 
 def model_for() -> str:

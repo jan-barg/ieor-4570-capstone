@@ -3,8 +3,10 @@
     rec = make(story_dir)                         # ElevenLabs voice, render, files; outputs in story_dir/video/
     rec = prepare(story_dir, voice.Paced(), out)  # steps 1-4 only: plan.json and narration.mp3 in out
 
-A narration longer than 72 s (with the 1.5 s hold) is read again 10% faster, once (decision 4).
-The record says what happened at each step, how long it took and what the voice cost.
+A narration longer than 72 s (with the 1.5 s hold) is not read again: the same recording is played
+up to 12% faster (free; a second reading cost the credits again and came out no shorter, Nov 26).
+The record says what happened at each step, how long it took and what the voice cost. The steps join
+the Langfuse trace given as trace_id (the live pipeline's, one per video); render.json keeps its id.
 """
 from __future__ import annotations
 
@@ -34,10 +36,13 @@ def inputs(story_dir: Path) -> tuple[dict, dict, dict]:
 
 
 def prepare(story_dir: Path, engine, out_dir: Path, *, voice_cache: Path | None = None, music: Path | None = None,
-            direction: bool = True, complete=None) -> dict:
+            direction: bool = True, complete=None, trace_id: str | None = None) -> dict:
     """Steps 1-4. Writes out_dir/plan.json and out_dir/narration.mp3 (and the music bed, if any).
     The voice director runs first (direct.py) when the voice reads tags; direction=False skips it."""
     t0 = time.time()
+    if complete is None and trace_id:
+        complete = lambda messages, name=None, model=None, **p: direct.model_call(      # noqa: E731
+            messages, name=name, model=model, trace_id=trace_id, **p)
     script, sf, p7 = inputs(story_dir)
     rec: dict = dict(story=story_dir.name, status="", steps={})
     res = check.check_script(script, p7)
@@ -80,13 +85,20 @@ def prepare(story_dir: Path, engine, out_dir: Path, *, voice_cache: Path | None 
 
 
 def make(story_dir: Path, engine=None, out_dir: Path | None = None, *, music: Path | None = None,
-         render: bool = True, extra: list[str] = (), trace: bool = True, direction: bool = True, complete=None) -> dict:
+         render: bool = True, extra: list[str] = (), trace: bool = True, direction: bool = True, complete=None,
+         trace_id: str | None = None) -> dict:
     """The whole module for one story: plan, MP4, loudness, poster, captions files and render.json.
-    Each step's time goes to the local call log and Langfuse (one trace per video)."""
+    Each step's time goes to the local call log and Langfuse, into the trace `trace_id` when one is given
+    (the live pipeline's trace for this video), else into a trace of this module's own."""
     engine = engine or voice.ElevenLabs()
     out_dir = Path(out_dir or story_dir / "video")
     started = time.time()
-    rec = prepare(story_dir, engine, out_dir, music=music, direction=direction, complete=complete)
+    if trace and not trace_id:
+        trace_id = tracing.tracer().new_trace(f"video:{story_dir.name[:8]}", metadata=dict(module=8))
+    rec = prepare(story_dir, engine, out_dir, music=music, direction=direction, complete=complete,
+                  trace_id=trace_id if trace else None)
+    if trace:
+        rec["trace_id"] = trace_id
     if rec["status"] == "planned" and render:
         t = time.time()
         raw = out_dir / "render.mp4"
@@ -99,14 +111,14 @@ def make(story_dir: Path, engine=None, out_dir: Path | None = None, *, music: Pa
         rec["seconds"] = round(time.time() - started, 2)
         (out_dir / "render.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
     if trace:
-        _trace(rec)
+        _trace(rec, trace_id)
     return rec
 
 
-def _trace(rec: dict) -> None:
+def _trace(rec: dict, trace_id: str) -> None:
+    """One span per step of this module, in the video's trace."""
     tr = tracing.tracer()
-    tid = tr.new_trace(f"video:{rec['story'][:8]}", metadata=dict(module=8, status=rec["status"]))
     for name, st in rec.get("steps", {}).items():
-        tr.span(name=f"video.{name}", trace_id=tid, metadata={k: v for k, v in st.items() if k != "voice"},
+        tr.span(name=f"video.{name}", trace_id=trace_id, metadata={k: v for k, v in st.items() if k != "voice"},
                 output=dict(seconds=st.get("seconds")), error=st.get("stop"))
     tr.flush()

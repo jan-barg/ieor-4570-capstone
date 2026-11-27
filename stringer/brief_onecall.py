@@ -32,7 +32,7 @@ VERSION = "onecall-1"
 MAX_CLAIMS = 40
 MAX_QUOTE_WORDS = 30
 MAX_TOKENS = 32000          # about 8,000 expected; room for long stories and any thinking
-CALL_TIMEOUT_S = 600        # one long answer; step 1's calls are short and use 180 s
+CALL_TIMEOUT_S = 600        # one long answer; step 1's calls are short and use 45 s
 
 SCHEMA = {"type": "json_schema", "json_schema": {"name": "story_file", "strict": True, "schema": {
     "type": "object", "additionalProperties": False,

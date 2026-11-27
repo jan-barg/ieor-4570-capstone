@@ -168,26 +168,75 @@ def test_the_brief_page_escapes_text_and_shows_each_part():
     assert "How each side tells it" in page and "Missing from Southland outlets" in page and "years of neglect" in page
 
 
-def test_build_story_runs_every_step_in_order_and_adds_up_the_cost(monkeypatch):
-    seen = []
+def _lanes(monkeypatch):
+    """build_story with every model step faked: each makes one 1-cent call and returns a fixture."""
+    import copy
+    import threading
+    seen, lock = [], threading.Lock()
 
-    def step(name, result):
+    def step(name, result, pos):
         def fn(*a, **k):
-            seen.append((name, k.get("model")))
-            complete = a[2] if name in ("read", "merge") else a[3] if name == "blind" else a[4]
-            complete([{"role": "user", "content": "x"}], name=name)
+            with lock:
+                seen.append((name, k.get("model")))
+            a[pos]([{"role": "user", "content": "x"}], name=name)
             return result
         return fn
-    monkeypatch.setattr(brief_read, "read_story", step("read", STEP1))
-    monkeypatch.setattr(brief_merge, "merge_story", step("merge", STEP2))
-    monkeypatch.setattr(brief_blind, "judge_blindspots", step("blind", judged()))
-    monkeypatch.setattr(brief_framing, "frame_story", step("frame", dict(SIDES, framing=FRAMING)))
+    marked = copy.deepcopy(STEP2)
+    marked["claims"][0]["conflicts_with"], marked["claims"][1]["conflicts_with"] = ["C2"], ["C1"]
+    answers = [dict(j, calls=1, quotes_bad_first=0) for j in judged()["blindspot_checks"]]
+    monkeypatch.setattr(brief_read, "read_story", step("read", STEP1, 2))
+    monkeypatch.setattr(brief_merge, "merge_claims", step("merge", copy.deepcopy(STEP2), 2))
+    monkeypatch.setattr(brief_merge, "mark_conflicts", step("conflicts", marked, 2))
+    monkeypatch.setattr(brief_blind, "judge_sides", step("blind", answers, 3))
+    monkeypatch.setattr(brief_framing, "frame_story", step("frame", dict(SIDES, framing=FRAMING), 4))
     monkeypatch.setattr(story_file, "picked", lambda meta, arts, n: (ARTS, GROUPS))
     fake = lambda step: (f"model-{step}", lambda m, name=None, **p: SimpleNamespace(text="", cost={"total": 0.01}))
+    return seen, fake
+
+
+def test_build_story_runs_the_lanes_side_by_side_and_adds_up_the_cost(monkeypatch):
+    seen, fake = _lanes(monkeypatch)
+    got = {}
+
+    def early(facts0, sf0):
+        got.update(claims=[c["id"] for c in sf0["claims"]], marks=[c["conflicts_with"] for c in sf0["claims"]],
+                   facts=len(facts0), sources=len(sf0["sources"]))
+    facts, sf = story_file.build_story(META, ARTS, fake, early=early)
+    assert [s for s, _ in seen[:2]] == ["read", "merge"] and seen[0][1] == "model-brief_read"
+    assert sorted(s for s, _ in seen[2:]) == ["blind", "conflicts", "frame"]
+    by = {c["id"]: c for c in sf["claims"]}
+    assert by["C1"]["conflicts_with"] == ["C2"] and by["C2"]["conflicts_with"] == ["C1"]      # the conflict lane's marks
+    south = next(b for b in sf["blindspots"] if b["silent_side"] == "south")
+    assert by["C3"]["blindspot"]["status"] == "blindspot" and south["central"] == ["C3"]       # the judge's answer
+    assert sf["perspectives"][0]["side_id"] == "north"
+    # what the early reader (the fact check's judge) saw: the final claims, before the conflict marks
+    assert got == dict(claims=["C1", "C2", "C3", "C4"], marks=[[], [], [], []], facts=len(facts), sources=4)
+    assert sf["meta"]["cost_usd"]["total"] == 0.05 and sf["meta"]["cost_usd"]["brief_merge"] == 0.02
+    assert sf["meta"]["steps"]["brief_sides"]["model"] == "code" and story_file.validate(sf, facts) == []
+
+
+def test_build_story_without_an_early_reader_gives_the_same_file(monkeypatch):
+    _, fake = _lanes(monkeypatch)
     facts, sf = story_file.build_story(META, ARTS, fake)
-    assert [s for s, _ in seen] == ["read", "merge", "blind", "frame"] and seen[0][1] == "model-brief_read"
-    assert sf["meta"]["cost_usd"]["total"] == 0.04 and sf["meta"]["steps"]["brief_sides"]["model"] == "code"
-    assert story_file.validate(sf, facts) == []
+    facts2, sf2 = story_file.build_story(META, ARTS, fake, early=lambda f, s: None)
+    strip = lambda x: dict(x, meta=dict(x["meta"], created_at=None))
+    assert facts == facts2 and strip(sf) == strip(sf2)
+
+
+def test_an_error_in_the_early_reader_is_raised(monkeypatch):
+    _, fake = _lanes(monkeypatch)
+
+    def early(facts0, sf0):
+        raise RuntimeError("the judge broke")
+    with pytest.raises(RuntimeError, match="the judge broke"):
+        story_file.build_story(META, ARTS, fake, early=early)
+
+
+def test_the_spend_cap_goes_through_a_step_instead_of_becoming_an_empty_answer():
+    s = story_file.Spend(cap_usd=0.0)
+    call = s.wrap("brief_read", lambda m, name=None, **p: SimpleNamespace(text="", cost={"total": 0.01}))
+    with pytest.raises(story_file.BudgetExceeded):
+        brief_read._call(call, [], {}, "brief_read")
 
 
 def test_the_spend_cap_stops_the_next_call():

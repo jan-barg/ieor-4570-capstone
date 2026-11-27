@@ -21,13 +21,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1 STRINGER_PRIVATE=/private
+# LITELLM_LOCAL_MODEL_COST_MAP: LiteLLM uses its built-in price list instead of fetching one from GitHub
+# when it is first loaded (a network call in every video's first seconds). Prices come from config/models.toml.
+ENV PYTHONUNBUFFERED=1 STRINGER_PRIVATE=/private LITELLM_LOCAL_MODEL_COST_MAP=True
 
 # Dependencies first, so a code change doesn't reinstall them.
 COPY render/package.json render/package-lock.json render/
 RUN cd render && npm ci --no-audit --no-fund && npx remotion browser ensure
+# The list comes from pyproject.toml itself, so a dependency added there reaches the image (it used to be
+# repeated here by hand, and the package below is installed with --no-deps).
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir "litellm==1.108.5" "langfuse==5.2.0" google-auth "python-dotenv==1.2.4"
+RUN python -c "import tomllib; print(*tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies'], sep=chr(10))" > /tmp/requirements.txt \
+ && pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY render render
 # Bundle the drawing code once here, so each video job skips it (render.mjs reuses a bundle whose files match).

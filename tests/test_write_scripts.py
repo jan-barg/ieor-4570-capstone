@@ -75,7 +75,7 @@ def test_eval_answers_are_replayed_for_free(folders, tmp_path):
     caller = ws.Caller(5.0, reuse=True, cache=cache, complete=paid(Fake([]), log))   # the fake writer has nothing left
     s = ws.run(5.0, only="11111111", caller=caller)
     assert caller.replayed == 1 and s["statuses"]["ok"] == 1
-    assert [x["name"] for x in log] == ["script line check", "script words"]
+    assert sorted(x["name"] for x in log) == ["script line check", "script words"]      # side by side: any order
 
 
 def test_estimate_is_free_and_counts_the_fix_round(folders):

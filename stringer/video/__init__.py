@@ -1,6 +1,8 @@
 """Module 8, the animation module: module 7's script.json in, a vertical MP4 out.
 
-No model writes or draws anything here. The steps (design settled Nov 26, system map module 8):
+Code draws and times everything here. One small model call, the voice director (direct.py), adds delivery
+tags to the lines before they are voiced; it can never change a word. The steps (design settled Nov 26,
+system map module 8):
 
   1. check.py   check the script against the shared shot catalog; a beat that can't be drawn safely
                 becomes a headline card

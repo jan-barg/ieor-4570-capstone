@@ -2,7 +2,7 @@
 
     from stringer import feed
     events = feed.fetch()                 # one GET of /v1/events (MTS_API_KEY, or the Mac's Keychain)
-    ev = feed.find("1e965a70", events)    # an event by its id or the id's first characters
+    ev = feed.find("1a2b3c4d", events)    # an event by its id or the id's first characters
 
 Events by Monitor the Situation (monitor-the-situation.com). Its terms forbid republishing the data,
 so what this returns stays in memory or in stringer_private/, never in the repo.

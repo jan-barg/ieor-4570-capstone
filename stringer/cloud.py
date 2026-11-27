@@ -1,11 +1,14 @@
-"""The two Google Cloud calls the deploy needs, with no extra library (google-auth's AuthorizedSession):
-put a file in a Cloud Storage bucket, and start a run of the Cloud Run job that makes one video.
+"""The Google Cloud calls the deploy needs, with no extra library (google-auth's AuthorizedSession):
+put a file in a Cloud Storage bucket, read one back, remove one, and start a run of the Cloud Run job
+that makes one video.
 
     cloud.upload("stringer-videos", "videos/<id>/video.mp4", Path("video.mp4"))
     cloud.open_object("stringer-videos", "videos/<id>/video.mp4", "bytes=0-")     # streamed back, for /media
-    cloud.start_job("<project>", "us-east1", "stringer-make", ["<event id>"])     # -> the execution's name
+    cloud.delete("stringer-private", "stories/<id>/script.json")                  # True if it was there
+    cloud.start_job("<project>", "us-east1", "stringer-make", ["<event id>"])     # -> the operation's name
 
-Settings on Cloud Run (cloudbuild.yaml sets them): STRINGER_PROJECT, STRINGER_REGION, STRINGER_JOB,
+Settings on Cloud Run (set by hand when the service and the job were made, README "Deploy";
+cloudbuild.yaml only swaps the image): STRINGER_PROJECT, STRINGER_REGION, STRINGER_JOB,
 STRINGER_VIDEO_BUCKET (finished videos and posters; private, the website streams them to signed-in
 Columbia accounts, Jan Nov 27) and STRINGER_PRIVATE_BUCKET (story folders; the Gate's records live
 there too, under gate/, through GATE_STORE)."""
@@ -18,7 +21,6 @@ from urllib.parse import quote
 
 UPLOAD = "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o"
 OBJECT = "https://storage.googleapis.com/storage/v1/b/{bucket}/o/{name}"
-PUBLIC = "https://storage.googleapis.com/{bucket}/{name}"
 RUN_JOB = "https://run.googleapis.com/v2/projects/{project}/locations/{region}/jobs/{job}:run"
 _session = None
 
@@ -42,14 +44,14 @@ def setting(name: str, default: str | None = None) -> str:
 
 def upload(bucket: str, name: str, path: Path, content_type: str | None = None, cache: str = "public, max-age=3600",
            timeout: float = 120.0) -> str:
-    """Puts one file at gs://bucket/name and returns its storage.googleapis.com URL (it opens in a browser
-    only if the bucket is public; the video bucket isn't, so the website streams from it instead)."""
+    """Puts one file at gs://bucket/name and returns that address. (Both buckets are private: the website
+    streams videos from theirs at /media/..., so there is no public link to hand out.)"""
     ctype = content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
     with open(path, "rb") as f:
         r = session().post(UPLOAD.format(bucket=bucket), params={"uploadType": "media", "name": name},
                            data=f, headers={"Content-Type": ctype, "Cache-Control": cache}, timeout=timeout)
     r.raise_for_status()
-    return PUBLIC.format(bucket=bucket, name=quote(name))
+    return f"gs://{bucket}/{name}"
 
 
 def open_object(bucket: str, name: str, range_header: str | None = None, timeout: float = 60.0):
@@ -58,6 +60,15 @@ def open_object(bucket: str, name: str, range_header: str | None = None, timeout
     headers = {"Range": range_header} if range_header else {}
     return session().get(OBJECT.format(bucket=bucket, name=quote(name, safe="")), params={"alt": "media"},
                          headers=headers, stream=True, timeout=timeout)
+
+
+def delete(bucket: str, name: str, timeout: float = 30.0) -> bool:
+    """Removes gs://bucket/name. True if it was there, False if there was nothing to remove."""
+    r = session().delete(OBJECT.format(bucket=bucket, name=quote(name, safe="")), timeout=timeout)
+    if r.status_code == 404:
+        return False
+    r.raise_for_status()
+    return True
 
 
 def start_job(project: str, region: str, job: str, args: list[str], timeout: float = 30.0) -> str:

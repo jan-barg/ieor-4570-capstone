@@ -6,26 +6,27 @@ responses, logs) lives in `../stringer_private/` (or wherever `STRINGER_PRIVATE`
 never go into a public repo: Monitor the Situation's terms forbid republishing its data.
 Events by Monitor the Situation (monitor-the-situation.com).
 
-The design is in `../STRINGER_SYSTEM_MAP.md`. Built so far: modules 1 to 8 (Gather through the
-finished video), the shared model layer and the shared eval runner. Still to build: module 0 (the
-Gate) and module 9 (the website).
+The design is in `../STRINGER_SYSTEM_MAP.md`. Built so far: module 0 (the Gate), modules 1 to 8 (Gather
+through the finished video), the one-event runner, the shared model layer, the shared eval runner and a
+test website on Cloud Run. Still to build: module 9 (the real front page and gallery).
 
 ## Setup
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/python -m pytest -q          # offline, no keys needed except outlets.csv in stringer_private
+.venv/bin/python -m pytest -q          # offline (tests/conftest.py turns Langfuse and the call log off); needs outlets.csv in stringer_private
 cd render && npm ci && cd ..           # module 8's drawing code (Remotion, headless Chrome); also needs ffmpeg
 ```
 
 Module 8 also needs its private assets in `stringer_private/video_assets/`: the map shapes (`geo/`),
 the music bed (`music/`) and the portrait photos (`people/`).
 
-Keys go in `.env` (git-ignored; copy `.env.example`, which lists every name): `TAVILY_API_KEY`,
-`GUARDIAN_API_KEY`, `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY` (module 8's narrator),
-`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (optional `LANGFUSE_HOST`), and optional `OPENROUTER_API_KEY`.
-A real environment variable wins over the file; the macOS Keychain is a fallback. Vertex models use Application Default
-Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project` header).
+Keys go in `.env` (git-ignored; copy `.env.example`, which lists every name): `MTS_API_KEY` (the event
+feed), `TAVILY_API_KEY`, `GUARDIAN_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY` (the script writer
+runs on it, so every video needs it), `ELEVENLABS_API_KEY` (module 8's narrator), `LANGFUSE_PUBLIC_KEY`,
+`LANGFUSE_SECRET_KEY` (optional `LANGFUSE_HOST`). A real environment variable wins over the file; the macOS
+Keychain is a fallback on a Mac. Vertex models use Application Default Credentials: project
+`agentic-ai-msds` on the Mac, and on Cloud Run the project `STRINGER_VERTEX_PROJECT` names.
 
 ## Layout
 
@@ -36,7 +37,10 @@ Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project`
 | `config/models.toml` | Which model each step uses, and every model's prices |
 | `stringer/models.py` | One `complete()` for every model (LiteLLM), with prompt-cache marks, token and cost accounting |
 | `stringer/tracing.py` | Logs every call to Langfuse (when keys exist) and to `runs/calls-*.jsonl` (no prompt text) |
-| `stringer/events.py` | Loads events from the Archive and the fixture list |
+| `stringer/events.py`, `stringer/feed.py` | Events from the Archive, the fixture list and the live `/v1/events` feed |
+| `stringer/gate/`, `config/gate.toml`, `scripts/gate_admin.py` | Module 0, the Gate: which events may become videos (`rules.py`, `policy.py`), whether one can start now (limits, Tavily and voice credits, a cost estimate: `core.py`, `cost.py`, `credits.py`), the shared records (`store.py`), reports and take-downs, and Jan's admin commands |
+| `stringer/pipeline.py`, `scripts/run_event.py` | One live event end to end: modules 1 to 8 with each step timed, charged to the Gate's ticket and traced as one Langfuse trace |
+| `web/server.py`, `scripts/run_job.py`, `stringer/cloud.py` | The test website, the Cloud Run job that makes one video per click, and the Cloud Storage and job calls they use |
 | `stringer/gather/` | Module 1: the query plan (`plan.py`), query writing (`queries.py`), Tavily and Guardian clients with a credit budget (`clients.py`), merging and dating (`merge.py`), the frozen layout and shared article cache (`store.py`), one event end to end (`run.py`) |
 | `scripts/smoke_models.py` | Checks every shortlisted model answers and reports cached tokens |
 | `scripts/freeze_fixtures.py` | Runs Gather on the 40 test stories, with a credit check and a hard cap |
@@ -73,7 +77,8 @@ Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project`
 .venv/bin/python -m scripts.filter_articles --model deepseek-v4.1-flash --cap 0.30   # apply module 2 to every story
 .venv/bin/python -m scripts.filter_articles --reapply           # after remerge_frozen: put the verdicts back, free
 .venv/bin/python -m scripts.coverage_report
-.venv/bin/python build/build_outlets.py --force                # rebuild outlets.csv from the seed
+# build/build_outlets.py --force rebuilds outlets.csv and side_lists.csv from the seed. Don't run it for now:
+# the seed predates the Nov 24 hand review, so it would undo that review on 13 outlets and one side list.
 .venv/bin/python -m scripts.gather_live --list                 # live events with 5+ reports, free
 .venv/bin/python -m scripts.gather_live --event <id> --dry-run # the sides plus a credit estimate, a fraction of a cent
 .venv/bin/python -m scripts.build_story_files live --only <id> --cap <usd>   # module 5 on one story, paid
@@ -97,11 +102,14 @@ its eval costs nothing. `remerge_frozen` rewrites `articles.jsonl`, so run
 
 `stringer/pipeline.py` runs modules 1–8 for one event after the Gate says go, timing each step and
 charging every model call, Tavily credit and ElevenLabs credit to the Gate's ticket (the cost check
-runs after the searches). `scripts/run_event.py` is its command:
+runs after the searches). The whole video is one Langfuse trace, with one span per step. After the merge
+call the last Story File calls and the fact check's model run side by side. A run ends as done, as
+"no video" (a judgment about the story, final), or as failed (a crash or a model that gave no answer,
+which a later click may try again). `scripts/run_event.py` is its command:
 
 ```bash
 .venv/bin/python -m scripts.run_event --list          # eligible events in the live feed now, free
-.venv/bin/python -m scripts.run_event <id8>           # the Gate, then modules 1-8; about $0.66 + credits
+.venv/bin/python -m scripts.run_event <id8>           # the Gate, then modules 1-8; $0.12-0.22 on Nov 27 (the Gate's estimate is $0.66)
 ```
 
 ## Deploy (Cloud Run, agentic-ai-capstone-jgb2170)
@@ -110,8 +118,12 @@ One image (`Dockerfile`) serves two things: the website (`web/server.py`; for no
 replaced by module 9) and the Cloud Run job that makes one video per click (`scripts/run_job.py`).
 A push to `main` runs `cloudbuild.yaml` through a Cloud Build trigger: it copies the private files from
 the private bucket, builds the image, and points the website and the job at it. Finished videos and
-posters go to a public-read bucket; story folders and the Gate's records go to a private one
-(`GATE_STORE=gs://<private bucket>/gate`). Keys come from Secret Manager as environment variables.
+posters go to a private video bucket (`videos/<event>/<ticket>/`), and the website streams them to
+signed-in Columbia accounts at `/media/...`. Each event's story files go to the private bucket at
+`stories/<event>/` after every run, also a failed or "no video" one; a later run of the same event
+overwrites them. The Gate's records are in the private bucket too (`GATE_STORE=gs://<private bucket>/gate`).
+Keys come from Secret Manager as environment variables. `cloudbuild.yaml` only swaps the image: the
+website's and the job's own settings were made by hand with the commands below.
 
 Set up once (done Nov 27):
 

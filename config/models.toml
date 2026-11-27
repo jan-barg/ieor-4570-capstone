@@ -1,7 +1,7 @@
 # Stringer model layer (settled Nov 24: one LiteLLM layer).
-# Each pipeline step names one model alias; evals swap models by editing one line under [steps].
-# Prices are USD per million tokens, from the Vertex and Anthropic price lists (map, Cross-cutting,
-# Nov 24). Code computes cost from these, so the log shows cost even for models LiteLLM doesn't know.
+# Each pipeline step names one model alias under [steps]; evals try other models with `run_eval --model`.
+# Prices are USD per million tokens, from the Vertex, Anthropic and OpenRouter price lists (map,
+# Cross-cutting). Code computes cost from these, so the log shows cost even for models LiteLLM doesn't know.
 
 [vertex]
 project = "agentic-ai-msds"
@@ -25,11 +25,11 @@ host_item = "langfuse_host"          # optional; default https://cloud.langfuse.
 [steps]
 gate_policy = "haiku-5-5"                # module 0 content check (the child-victim rule), prompt child-4 (Jan's narrower rule); chosen by its eval (Jan, Nov 26)
 query_writer = "gemini-3.5-flash-lite"   # module 1: reworded, side and background queries
-same_story = "deepseek-v4.1-flash"       # module 2 (to be chosen by its eval)
+same_story = "deepseek-v4.1-flash"       # module 2 (decided Nov 24 from its eval, prompt p2)
 lens = "haiku-5-5"                       # module 4, choosing the sides (decided Nov 26, Jan, from its eval: prompt lens-3, 36 of 40 cold, 39 of 40 menu; ~0.06 cents a story)
 brief_read = "deepseek-v4.1-flash"       # module 5 step 1 (decided Nov 25, Jan, from the step 1 eval)
 brief_onecall = "sonnet-5-5"             # module 5 baseline to beat: one call writes the Story File
-brief_merge = "deepseek-v4.1-flash"      # module 5 step 2 (decided Nov 25, Jan: Sonnet and GLM cost too much; prompt to be tuned)
+brief_merge = "deepseek-v4.1-flash"      # module 5 step 2 (decided Nov 25, Jan: Sonnet and GLM cost too much; prompt merge-14)
 brief_framing = "sonnet-5-5"             # module 5 step 4, how each side tells it (decided Nov 25, Jan: sharper points, 55 of 60 good vs DeepSeek 51; ~1.9 cents a story)
 brief_blind = "deepseek-v4.1-flash"      # module 5 step 3b: blindspot judge (Nov 25, same model as steps 1 and 2)
 fact_check = "haiku-5-5"                 # module 6 judge (decided Nov 26, Jan: "haiku is good enough ... considering the cost and time"; check-5: 48 of 51 planted, 0.85% good claims lost, 1.4 cents a story)
@@ -37,6 +37,27 @@ script = "gpt-6.1-terra"                 # module 7 writer (decided Nov 26, Jan:
 script_line_check = "haiku-5-5"         # module 7 line check: the fact check's model (decided Nov 26, Jan: all as recommended)
 script_words = "gemini-3.5-flash-lite"  # module 7 loaded-words check: wording-1's judge (Nov 26, same)
 voice_direction = "haiku-5-5"            # module 8 voice director (Jan, Nov 26: "v4 turbo with expressive tags"; ~0.07 cents a story)
+
+# ---- Time limits inside a live video (seconds for one model call; stringer/pipeline.py turns them on).
+# About three times the slowest normal call in the Nov 27 live runs. Each call already has one retry, so
+# a stuck call is asked again instead of waited for: one hung call cost 180 s of a 5-minute video that
+# day, and two steps had no limit at all (LiteLLM's own default is 6,000 s). Evals don't use this table:
+# they keep each module's own, longer limit.
+
+[live_timeouts]
+default = 90
+lens = 20
+query_writer = 20
+same_story = 45
+brief_read = 45
+brief_merge = 90
+brief_blind = 60
+brief_framing = 45
+fact_check = 90
+script = 100
+script_line_check = 75
+script_words = 30
+voice_direction = 30
 
 # ---- Models. shortlist = true: the smoke test checks it answers and reports cached tokens ----
 
@@ -105,7 +126,7 @@ provider = "vertex"
 input = 0.75                # sale price through Dec 31
 output = 3.75
 cached_input = 0.075
-shortlist = true
+shortlist = false           # off the shortlist since Nov 25: it never answered
 note = "404 from agentic-ai-msds on Nov 24 (global and us-central1), though it is in the model list"
 
 # ---- Added Nov 26 for the fact check (module 6): cheaper than Sonnet, stronger than Haiku on the
