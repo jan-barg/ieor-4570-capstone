@@ -16,3 +16,8 @@ __pycache__/
 stringer_private/
 *.jsonl
 *.csv.gz
+
+# Module 8 render project: installed packages, bundles and local renders
+render/node_modules/
+render/.bundle/
+render/out/

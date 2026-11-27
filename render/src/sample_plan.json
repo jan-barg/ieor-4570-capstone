@@ -1,0 +1,801 @@
+{
+ "version": "plan-1",
+ "catalog": "shots-2",
+ "fps": 30,
+ "width": 1080,
+ "height": 1920,
+ "frames": 558,
+ "story": {
+  "id": "sample",
+  "title": "Ferry strike halts island crossings",
+  "developing": true
+ },
+ "audio": {
+  "voice": null,
+  "music": null,
+  "music_db": null
+ },
+ "beats": [
+  {
+   "n": 1,
+   "shot": "hook",
+   "start": 0,
+   "end": 131,
+   "frames": 131,
+   "blanks": {
+    "title": "Ferry strike halts island crossings",
+    "tag": "Developing"
+   },
+   "claims": [],
+   "marks": [],
+   "words": [
+    {
+     "w": "Ferry",
+     "start": 0,
+     "end": 8
+    },
+    {
+     "w": "crews",
+     "start": 11,
+     "end": 19
+    },
+    {
+     "w": "walked",
+     "start": 22,
+     "end": 31
+    },
+    {
+     "w": "out",
+     "start": 34,
+     "end": 40
+    },
+    {
+     "w": "at",
+     "start": 43,
+     "end": 49
+    },
+    {
+     "w": "dawn,",
+     "start": 52,
+     "end": 60
+    },
+    {
+     "w": "and",
+     "start": 63,
+     "end": 69
+    },
+    {
+     "w": "no",
+     "start": 72,
+     "end": 78
+    },
+    {
+     "w": "boats",
+     "start": 81,
+     "end": 89
+    },
+    {
+     "w": "left",
+     "start": 92,
+     "end": 98
+    },
+    {
+     "w": "the",
+     "start": 101,
+     "end": 107
+    },
+    {
+     "w": "harbour.",
+     "start": 110,
+     "end": 122
+    }
+   ],
+   "label": "",
+   "swapped_from": null,
+   "broll": {
+    "kind": "none",
+    "name": ""
+   },
+   "illustration": true,
+   "map": {
+    "frame": [
+     3.0,
+     59.0,
+     7.6,
+     61.6
+    ],
+    "places": [
+     {
+      "name": "Bergen, Norway",
+      "lat": 60.39,
+      "lng": 5.32
+     }
+    ],
+    "outline": null
+   }
+  },
+  {
+   "n": 2,
+   "shot": "headline",
+   "start": 131,
+   "end": 261,
+   "frames": 130,
+   "blanks": {
+    "title": "Union says talks broke down overnight"
+   },
+   "claims": [],
+   "marks": [],
+   "words": [
+    {
+     "w": "The",
+     "start": 0,
+     "end": 6
+    },
+    {
+     "w": "crews'",
+     "start": 9,
+     "end": 18
+    },
+    {
+     "w": "union",
+     "start": 21,
+     "end": 29
+    },
+    {
+     "w": "said",
+     "start": 32,
+     "end": 38
+    },
+    {
+     "w": "talks",
+     "start": 41,
+     "end": 49
+    },
+    {
+     "w": "with",
+     "start": 52,
+     "end": 58
+    },
+    {
+     "w": "the",
+     "start": 61,
+     "end": 67
+    },
+    {
+     "w": "operator",
+     "start": 70,
+     "end": 82
+    },
+    {
+     "w": "broke",
+     "start": 85,
+     "end": 93
+    },
+    {
+     "w": "down",
+     "start": 96,
+     "end": 102
+    },
+    {
+     "w": "overnight.",
+     "start": 105,
+     "end": 121
+    }
+   ],
+   "label": "Source: the crews' union",
+   "swapped_from": null,
+   "broll": {
+    "kind": "none",
+    "name": ""
+   },
+   "illustration": false
+  },
+  {
+   "n": 3,
+   "shot": "sides",
+   "start": 261,
+   "end": 421,
+   "frames": 160,
+   "blanks": {
+    "points": [
+     {
+      "id": "A1",
+      "side": "A",
+      "label": "Pro-union (local papers)",
+      "kind": "emphasis",
+      "point": "x",
+      "outlets": 2
+     },
+     {
+      "id": "B1",
+      "side": "B",
+      "label": "Pro-operator (business press)",
+      "kind": "emphasis",
+      "point": "x",
+      "outlets": 1
+     }
+    ]
+   },
+   "claims": [],
+   "marks": [
+    {
+     "mark": "sideA",
+     "text": "Local papers stress the crews' pay.",
+     "start": 0,
+     "end": 62,
+     "words": [
+      {
+       "w": "Local",
+       "start": 0,
+       "end": 8
+      },
+      {
+       "w": "papers",
+       "start": 11,
+       "end": 20
+      },
+      {
+       "w": "stress",
+       "start": 23,
+       "end": 32
+      },
+      {
+       "w": "the",
+       "start": 35,
+       "end": 41
+      },
+      {
+       "w": "crews'",
+       "start": 44,
+       "end": 53
+      },
+      {
+       "w": "pay.",
+       "start": 56,
+       "end": 62
+      }
+     ]
+    },
+    {
+     "mark": "sideB",
+     "text": "The business press stresses the cost to shops.",
+     "start": 65,
+     "end": 151,
+     "words": [
+      {
+       "w": "The",
+       "start": 65,
+       "end": 71
+      },
+      {
+       "w": "business",
+       "start": 74,
+       "end": 86
+      },
+      {
+       "w": "press",
+       "start": 89,
+       "end": 97
+      },
+      {
+       "w": "stresses",
+       "start": 100,
+       "end": 112
+      },
+      {
+       "w": "the",
+       "start": 115,
+       "end": 121
+      },
+      {
+       "w": "cost",
+       "start": 124,
+       "end": 130
+      },
+      {
+       "w": "to",
+       "start": 133,
+       "end": 139
+      },
+      {
+       "w": "shops.",
+       "start": 142,
+       "end": 151
+      }
+     ]
+    }
+   ],
+   "words": [
+    {
+     "w": "Local",
+     "start": 0,
+     "end": 8
+    },
+    {
+     "w": "papers",
+     "start": 11,
+     "end": 20
+    },
+    {
+     "w": "stress",
+     "start": 23,
+     "end": 32
+    },
+    {
+     "w": "the",
+     "start": 35,
+     "end": 41
+    },
+    {
+     "w": "crews'",
+     "start": 44,
+     "end": 53
+    },
+    {
+     "w": "pay.",
+     "start": 56,
+     "end": 62
+    },
+    {
+     "w": "The",
+     "start": 65,
+     "end": 71
+    },
+    {
+     "w": "business",
+     "start": 74,
+     "end": 86
+    },
+    {
+     "w": "press",
+     "start": 89,
+     "end": 97
+    },
+    {
+     "w": "stresses",
+     "start": 100,
+     "end": 112
+    },
+    {
+     "w": "the",
+     "start": 115,
+     "end": 121
+    },
+    {
+     "w": "cost",
+     "start": 124,
+     "end": 130
+    },
+    {
+     "w": "to",
+     "start": 133,
+     "end": 139
+    },
+    {
+     "w": "shops.",
+     "start": 142,
+     "end": 151
+    }
+   ],
+   "label": "",
+   "swapped_from": null,
+   "broll": {
+    "kind": "none",
+    "name": ""
+   },
+   "illustration": false
+  },
+  {
+   "n": 4,
+   "shot": "sources",
+   "start": 421,
+   "end": 558,
+   "frames": 137,
+   "blanks": {},
+   "claims": [],
+   "marks": [],
+   "words": [
+    {
+     "w": "We",
+     "start": 0,
+     "end": 6
+    },
+    {
+     "w": "read",
+     "start": 9,
+     "end": 15
+    },
+    {
+     "w": "six",
+     "start": 18,
+     "end": 24
+    },
+    {
+     "w": "articles.",
+     "start": 27,
+     "end": 41
+    },
+    {
+     "w": "Details",
+     "start": 44,
+     "end": 55
+    },
+    {
+     "w": "may",
+     "start": 58,
+     "end": 64
+    },
+    {
+     "w": "still",
+     "start": 67,
+     "end": 75
+    },
+    {
+     "w": "change.",
+     "start": 78,
+     "end": 89
+    }
+   ],
+   "label": "",
+   "swapped_from": null,
+   "broll": {
+    "kind": "none",
+    "name": ""
+   },
+   "illustration": false
+  }
+ ],
+ "captions": [
+  {
+   "beat": 0,
+   "start": 0,
+   "end": 43,
+   "words": [
+    {
+     "w": "Ferry",
+     "start": 0,
+     "end": 8
+    },
+    {
+     "w": "crews",
+     "start": 11,
+     "end": 19
+    },
+    {
+     "w": "walked",
+     "start": 22,
+     "end": 31
+    },
+    {
+     "w": "out",
+     "start": 34,
+     "end": 40
+    }
+   ]
+  },
+  {
+   "beat": 0,
+   "start": 43,
+   "end": 81,
+   "words": [
+    {
+     "w": "at",
+     "start": 43,
+     "end": 49
+    },
+    {
+     "w": "dawn,",
+     "start": 52,
+     "end": 60
+    },
+    {
+     "w": "and",
+     "start": 63,
+     "end": 69
+    },
+    {
+     "w": "no",
+     "start": 72,
+     "end": 78
+    }
+   ]
+  },
+  {
+   "beat": 0,
+   "start": 81,
+   "end": 130,
+   "words": [
+    {
+     "w": "boats",
+     "start": 81,
+     "end": 89
+    },
+    {
+     "w": "left",
+     "start": 92,
+     "end": 98
+    },
+    {
+     "w": "the",
+     "start": 101,
+     "end": 107
+    },
+    {
+     "w": "harbour.",
+     "start": 110,
+     "end": 122
+    }
+   ]
+  },
+  {
+   "beat": 1,
+   "start": 131,
+   "end": 172,
+   "words": [
+    {
+     "w": "The",
+     "start": 131,
+     "end": 137
+    },
+    {
+     "w": "crews'",
+     "start": 140,
+     "end": 149
+    },
+    {
+     "w": "union",
+     "start": 152,
+     "end": 160
+    },
+    {
+     "w": "said",
+     "start": 163,
+     "end": 169
+    }
+   ]
+  },
+  {
+   "beat": 1,
+   "start": 172,
+   "end": 216,
+   "words": [
+    {
+     "w": "talks",
+     "start": 172,
+     "end": 180
+    },
+    {
+     "w": "with",
+     "start": 183,
+     "end": 189
+    },
+    {
+     "w": "the",
+     "start": 192,
+     "end": 198
+    },
+    {
+     "w": "operator",
+     "start": 201,
+     "end": 213
+    }
+   ]
+  },
+  {
+   "beat": 1,
+   "start": 216,
+   "end": 260,
+   "words": [
+    {
+     "w": "broke",
+     "start": 216,
+     "end": 224
+    },
+    {
+     "w": "down",
+     "start": 227,
+     "end": 233
+    },
+    {
+     "w": "overnight.",
+     "start": 236,
+     "end": 252
+    }
+   ]
+  },
+  {
+   "beat": 2,
+   "start": 261,
+   "end": 305,
+   "words": [
+    {
+     "w": "Local",
+     "start": 261,
+     "end": 269
+    },
+    {
+     "w": "papers",
+     "start": 272,
+     "end": 281
+    },
+    {
+     "w": "stress",
+     "start": 284,
+     "end": 293
+    },
+    {
+     "w": "the",
+     "start": 296,
+     "end": 302
+    }
+   ]
+  },
+  {
+   "beat": 2,
+   "start": 305,
+   "end": 350,
+   "words": [
+    {
+     "w": "crews'",
+     "start": 305,
+     "end": 314
+    },
+    {
+     "w": "pay.",
+     "start": 317,
+     "end": 323
+    },
+    {
+     "w": "The",
+     "start": 326,
+     "end": 332
+    },
+    {
+     "w": "business",
+     "start": 335,
+     "end": 347
+    }
+   ]
+  },
+  {
+   "beat": 2,
+   "start": 350,
+   "end": 394,
+   "words": [
+    {
+     "w": "press",
+     "start": 350,
+     "end": 358
+    },
+    {
+     "w": "stresses",
+     "start": 361,
+     "end": 373
+    },
+    {
+     "w": "the",
+     "start": 376,
+     "end": 382
+    },
+    {
+     "w": "cost",
+     "start": 385,
+     "end": 391
+    }
+   ]
+  },
+  {
+   "beat": 2,
+   "start": 394,
+   "end": 420,
+   "words": [
+    {
+     "w": "to",
+     "start": 394,
+     "end": 400
+    },
+    {
+     "w": "shops.",
+     "start": 403,
+     "end": 412
+    }
+   ]
+  },
+  {
+   "beat": 3,
+   "start": 421,
+   "end": 465,
+   "words": [
+    {
+     "w": "We",
+     "start": 421,
+     "end": 427
+    },
+    {
+     "w": "read",
+     "start": 430,
+     "end": 436
+    },
+    {
+     "w": "six",
+     "start": 439,
+     "end": 445
+    },
+    {
+     "w": "articles.",
+     "start": 448,
+     "end": 462
+    }
+   ]
+  },
+  {
+   "beat": 3,
+   "start": 465,
+   "end": 518,
+   "words": [
+    {
+     "w": "Details",
+     "start": 465,
+     "end": 476
+    },
+    {
+     "w": "may",
+     "start": 479,
+     "end": 485
+    },
+    {
+     "w": "still",
+     "start": 488,
+     "end": 496
+    },
+    {
+     "w": "change.",
+     "start": 499,
+     "end": 510
+    }
+   ]
+  }
+ ],
+ "sources_card": {
+  "read": 6,
+  "sides": [
+   {
+    "side": "A",
+    "label": "Pro-union (local papers)",
+    "read": 2
+   },
+   {
+    "side": "B",
+    "label": "Pro-operator (business press)",
+    "read": 1
+   }
+  ],
+  "elsewhere": 3,
+  "groups": {
+   "A": 2,
+   "B": 1,
+   "wire": 1,
+   "other": 2
+  },
+  "outlets": [
+   "Harbour Gazette",
+   "Island Post",
+   "Coast Business Daily",
+   "Example Wire",
+   "Northern Herald",
+   "Ferry Weekly"
+  ],
+  "credits": [
+   "Made-up sample for Remotion Studio",
+   "Narration voice: none"
+  ],
+  "ai_mark": "Made with AI from 6 news articles"
+ },
+ "overlays": {
+  "ai_mark": "Made with AI"
+ },
+ "swaps": [],
+ "voice": {
+  "engine": "none"
+ }
+}

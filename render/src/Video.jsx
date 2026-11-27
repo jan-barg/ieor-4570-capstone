@@ -1,0 +1,113 @@
+// The whole video from one render plan (stringer/video/plan.py, version plan-1): one canvas per beat,
+// the captions on top, the narration and the music bed underneath.
+import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {AbsoluteFill, Audio, Sequence, continueRender, delayRender, interpolate, staticFile, useCurrentFrame} from 'remotion';
+import {K, L, PAL, PX_H, PX_W, SANS, fontsLoaded, paperLayer, smallCaps} from './style.js';
+import {aiMark, drawHeadline, drawHook, drawSides, drawSources} from './cards.js';
+import {drawMap} from './mapshots.js';
+import {drawBroll} from './props.js';
+import {loadPortrait} from './portraits.js';
+import {layoutProbe} from './layout.js';
+import {drawBigNumber, drawClaims, drawDocument, drawQuote, drawTally, drawTimeline} from './datashots.js';
+
+function drawNotYet(ctx, s) {
+  ctx.drawImage(paperLayer(), 0, 0);
+  ctx.save();
+  ctx.scale(K, K);
+  smallCaps(ctx, `${s.beat.shot} · not drawn yet`, L.left, L.content + 20, {size: 9, color: PAL.inkSoft});
+  aiMark(ctx, false);
+  ctx.restore();
+}
+
+export const SHOTS = {
+  hook: drawHook,
+  headline: drawHeadline,
+  sides: drawSides,
+  sources: drawSources,
+  map_locate: drawMap,
+  map_link: drawMap,
+  map_spread: drawMap,
+  big_number: drawBigNumber,
+  timeline: drawTimeline,
+  quote: drawQuote,
+  claim_vs_claim: drawClaims,
+  document: drawDocument,
+  tally: drawTally,
+};
+
+// One canvas for one beat. The first frame waits (delayRender) until the fonts and the beat's portrait are ready.
+function Shot({beat, plan, from}) {
+  const frame = useCurrentFrame();
+  const ref = useRef(null);
+  const [handle] = useState(() => delayRender(`beat ${beat.n}`));
+  const released = useRef(false);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const src = beat.broll?.portrait?.src;
+    // a portrait that fails to load is left out (drawBroll finds no image), never a stalled render
+    const photo = src ? loadPortrait(staticFile(src)).catch(() => null) : null;
+    Promise.all([fontsLoaded, photo]).then(() => setReady(true));
+  }, [beat]);
+  useLayoutEffect(() => {
+    if (!ready || !ref.current) return;
+    const ctx = ref.current.getContext('2d', {willReadFrequently: true});
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, PX_W, PX_H);
+    const st = {beat, t: frame, frame: from + frame, plan};
+    const probe = plan.debug_layout ? layoutProbe(ctx) : null;      // eval 7 only (layout.js)
+    (SHOTS[beat.shot] || drawNotYet)(ctx, st);
+    drawBroll(ctx, st);
+    if (probe) probe.report(beat, from + frame);
+    if (!released.current) {
+      released.current = true;
+      continueRender(handle);
+    }
+  }, [frame, ready, beat, plan, from, handle]);
+  return <canvas ref={ref} width={PX_W} height={PX_H} style={{position: 'absolute', width: '100%', height: '100%'}} />;
+}
+
+// Word-by-word captions: chunks of up to 4 words that never cross a cut, with the spoken word lit.
+function Captions({captions}) {
+  const frame = useCurrentFrame();
+  const chunk = captions.find((c) => c.start <= frame && frame < c.end);
+  if (!chunk) return null;
+  let lit = -1;
+  chunk.words.forEach((w, i) => { if (w.start <= frame) lit = i; });
+  return (
+    <div style={{
+      position: 'absolute', top: L.captionTop * K, left: L.left * K, width: (L.right - L.left) * K,
+      display: 'flex', justifyContent: 'center',
+    }}>
+      <div style={{
+        background: 'rgba(243,238,225,0.94)', borderRadius: 18, padding: '12px 26px',
+        fontFamily: SANS, fontWeight: 600, fontSize: 50, color: PAL.ink, lineHeight: 1.18, textAlign: 'center',
+      }}>
+        {chunk.words.map((w, i) => (
+          <span key={i} style={{color: i === lit ? PAL.vermilion : PAL.ink}}>{w.w}{i < chunk.words.length - 1 ? ' ' : ''}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const fromDb = (db) => Math.pow(10, db / 20);
+
+export const Video = ({plan, audioBase = 'run'}) => {
+  const music = plan.audio?.music;
+  const gain = fromDb(plan.audio?.music_db ?? -20);
+  return (
+    <AbsoluteFill style={{backgroundColor: PAL.paper}}>
+      {plan.beats.map((beat) => (
+        <Sequence key={beat.n} from={beat.start} durationInFrames={Math.max(1, beat.end - beat.start)}>
+          <Shot beat={beat} plan={plan} from={beat.start} />
+        </Sequence>
+      ))}
+      <Captions captions={plan.captions || []} />
+      {plan.audio?.voice ? <Audio src={staticFile(`${audioBase}/${plan.audio.voice}`)} /> : null}
+      {music ? (
+        <Audio src={staticFile(`${audioBase}/${music}`)} loop
+          volume={(f) => gain * interpolate(f, [0, 30, plan.frames - 45, plan.frames], [0, 1, 1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})} />
+      ) : null}
+    </AbsoluteFill>
+  );
+};
