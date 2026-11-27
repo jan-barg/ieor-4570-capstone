@@ -164,25 +164,40 @@ def test_receipts_without_a_divide_or_files(tmp_path):
     assert D.receipts(D.Files(local=tmp_path / "nothing"), EID, "T1") is None
 
 
-def test_files_from_a_bucket_are_cached():
-    class Resp:
-        def __init__(self, code, body=b""):
-            self.status_code, self.body = code, body
+class Resp:
+    def __init__(self, code, body=b""):
+        self.status_code, self.body = code, body
 
-        def iter_content(self, n):
-            yield self.body
+    def iter_content(self, n):
+        yield self.body
 
-        def close(self):
-            pass
+    def close(self):
+        pass
+
+
+def test_story_files_from_the_bucket():
+    """stories/<event>/ holds the newest run, and run.json names its ticket (scripts/run_job.py); runs before
+    Nov 27 kept stories/<event>/<ticket>/. A video's receipts must come from its own run."""
+    objects = {f"stories/{EID}/run.json": {"ticket": "T2", "outcome": "no_video"},
+               f"stories/{EID}/pipeline.json": {"run": "T2"},
+               f"stories/{EID}/T1/pipeline.json": {"run": "T1"}}
     asked = []
 
     def opener(bucket, name):
         asked.append((bucket, name))
-        return Resp(200, b'{"ok": 1}') if name.endswith("pipeline.json") else Resp(404)
-    f = D.Files(bucket="priv", opener=opener)
-    assert f.read(EID, "T1", "pipeline.json") == {"ok": 1} and f.read(EID, "T1", "pipeline.json") == {"ok": 1}
-    assert f.read(EID, "T1", "script.json") is None and f.read(EID, None, "script.json") is None
-    assert asked == [("priv", f"stories/{EID}/T1/pipeline.json"), ("priv", f"stories/{EID}/T1/script.json")]
+        return Resp(200, json.dumps(objects[name]).encode()) if name in objects else Resp(404)
+    clock = Clock(0.0)
+    f = D.Files(bucket="priv", opener=opener, clock=clock)
+    assert f.read(EID, "T2", "pipeline.json") == {"run": "T2"}
+    assert f.read(EID, "T1", "pipeline.json") == {"run": "T1"}             # an older video's own folder
+    assert f.read(EID, "T3", "pipeline.json") is None                      # not this run's files
+    n = len(asked)
+    assert f.read(EID, "T2", "pipeline.json") == {"run": "T2"} and f.read(EID, "T3", "pipeline.json") is None
+    assert len(asked) == n and all(b == "priv" for b, _ in asked)          # found files and recent misses are kept
+    objects.update({f"stories/{EID}/run.json": {"ticket": "T3"}, f"stories/{EID}/pipeline.json": {"run": "T3"}})
+    clock.t += D.MISS_S + 1
+    assert f.read(EID, "T3", "pipeline.json") == {"run": "T3"}             # a rerun's files show a minute later
+    assert f.read(EID, "T2", "pipeline.json") == {"run": "T2"}             # still T2's own
 
 
 # ---- the progress page's run -------------------------------------------------------------------------------------

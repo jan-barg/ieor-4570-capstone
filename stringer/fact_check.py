@@ -47,6 +47,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import brief_read, brief_sides, story_file
+from .outlets import LOW_RELIABILITY, STATE_LEVELS
 
 VERSION = "check-5"       # check-2 (Nov 25): the reason first; kept hedges are backed; speaker never the outlet.
                             # check-3 (Nov 25): any difference the reason finds means not backed
@@ -56,11 +57,13 @@ VERSION = "check-5"       # check-2 (Nov 25): the reason first; kept hedges are 
                             #   claim together ("one is enough" only when they disagree); each card shows
                             #   "said by: X" from the reader, who saw the whole article.
 BATCH = 20                  # claims per judge call
-BATCH_WORKERS = 3           # judge calls side by side within one story
+BATCH_WORKERS = 8           # judge calls side by side within one story: every batch at once (a story has
+                            # 3-5; at 3, a fourth batch waited 11-15 s for a free worker in the Nov 27 live runs)
 MAX_TOKENS = 16000          # thinking counts toward this on some models
 CALL_TIMEOUT_S = 300
 EARLY_HOURS = 48            # an article dated more than this before the event's start isn't coverage of it
-MANY_DROPS = 0.10           # more than this share of claims dropped: no video until a person looks
+MANY_DROPS = 0.10           # more than this share of claims dropped gets the "many drops" flag. A note, not a
+                            # stop: the video is still made from the claims that are left (Jan, Nov 27)
 CONTEXT_CHARS = 500         # at most this much of the sentence before and after a quote
 SENTENCE_CHARS = 900        # and of the quote's own sentence
 
@@ -71,7 +74,7 @@ PROBLEMS = ("none", "number", "who did what", "place or date", "cause", "more ce
 OWN_VOICE = {"", "the outlet", "the article"}
 
 FLAGS = {   # code -> (who reads it, what it does); the fact check's additions to the fixed flag list
-    "many drops": ("the pipeline", "no video until a person looks"),
+    "many drops": ("the pipeline", "noted in script.json (held) and pipeline.json; the video is still made"),
     "against the event": ("the script writer", "gives both accounts: these claims disagree with the event summary"),
     "unchecked": ("the pipeline", "these claims got no usable judge answer; the script can't use them"),
 }
@@ -418,8 +421,10 @@ def _outlets(arts: list[str], src: dict) -> str:
     for a in arts:
         s = src.get(a) or {}
         n = s.get("outlet_name") or s.get("outlet") or a
-        if s.get("state_media") in ("State-Controlled", "State-Affiliated", "Captured") and "state media" not in n.lower():
-            n = f"{n} ({s['state_media'].lower()} media)"
+        # the outlet table's three state-run levels (State-Controlled, Captured Public, Captured Private) are
+        # all named "state-controlled" here; the independent public levels get no mark (map, module 3)
+        if STATE_LEVELS.get(s.get("state_media")) == "state-controlled" and "state media" not in n.lower():
+            n = f"{n} (state-controlled media)"
         if n not in names:
             names.append(n)
     return " and ".join(names) if len(names) <= 2 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -497,7 +502,7 @@ def apply(sf: dict, facts: list[dict], pw: dict, judged: dict | None, *, model: 
             reasons.append(f"the quotes give it as {v['speaker'] or named or 'someone'}'s account")
         if c.get("flags"):
             rules.append("b")
-            reasons.append("every source is " + ("unrated" if "unrated only" in c["flags"] else "under 0.5"))
+            reasons.append("every source is " + ("unrated" if "unrated only" in c["flags"] else f"under {LOW_RELIABILITY}"))
         if not named and c.get("independent", 0) <= 1:
             rules.append("c")
             reasons.append("one outlet, in its own voice")
@@ -565,14 +570,29 @@ def apply(sf: dict, facts: list[dict], pw: dict, judged: dict | None, *, model: 
 # ---- all together ------------------------------------------------------------------------------------
 
 def check_story(sf: dict, facts: list[dict], articles: dict | list, complete=None, *, model: str = "",
-                table=None, size: int = BATCH, workers: int = BATCH_WORKERS) -> tuple[list[dict], dict]:
+                table=None, size: int = BATCH, workers: int = BATCH_WORKERS,
+                judged: dict | None = None) -> tuple[list[dict], dict]:
     """The fact check for one story. articles: {id: article} or a list (articles.jsonl rows).
-    complete=None runs passes 1 and 3 only: every claim that keeps a card is "unchecked"."""
+    complete=None runs passes 1 and 3 only: every claim that keeps a card is "unchecked".
+    judged: pass 2's answer when it was already made by judge_early() (the live run starts the judge
+    beside the last Story File steps); then no model is called here."""
     if isinstance(articles, list):
         articles = {a["id"]: a for a in articles}
     pw = paperwork(sf, facts, articles, table)
-    judged = judge(sf, facts, pw, complete, model=model, size=size, workers=workers) if complete else None
-    return apply(sf, facts, pw, judged, model=model if complete else "code")
+    if judged is None and complete:
+        judged = judge(sf, facts, pw, complete, model=model, size=size, workers=workers)
+    return apply(sf, facts, pw, judged, model=model if (complete or judged is not None) else "code")
+
+
+def judge_early(sf: dict, facts: list[dict], articles: dict | list, complete, *, model: str = "", table=None,
+                size: int = BATCH, workers: int = BATCH_WORKERS) -> dict:
+    """Passes 1 and 2 on a Story File whose claims are final but whose conflict marks, blindspot checks
+    and framing are still being made. The judge reads none of those: only each claim's words, who says
+    it and its cards in context (_items). Hand the result to check_story(..., judged=...) on the finished
+    file, which runs the paperwork again (code, free) and applies the rules."""
+    if isinstance(articles, list):
+        articles = {a["id"]: a for a in articles}
+    return judge(sf, facts, paperwork(sf, facts, articles, table), complete, model=model, size=size, workers=workers)
 
 
 # ---- the story folder --------------------------------------------------------------------------------
@@ -590,10 +610,11 @@ def read_articles(story_dir) -> dict:
 
 
 def check_folder(story_dir, complete=None, *, model: str = "", table=None,
-                 workers: int = BATCH_WORKERS) -> tuple[list[dict], dict]:
+                 workers: int = BATCH_WORKERS, judged: dict | None = None) -> tuple[list[dict], dict]:
     """check_story() on one story folder: its Story File, facts and articles."""
     facts, sf = story_file.read(story_dir)
-    return check_story(sf, facts, read_articles(story_dir), complete, model=model, table=table, workers=workers)
+    return check_story(sf, facts, read_articles(story_dir), complete, model=model, table=table, workers=workers,
+                       judged=judged)
 
 
 def write_checked(story_dir, facts: list[dict], sf: dict) -> Path:

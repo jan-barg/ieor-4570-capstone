@@ -1,6 +1,7 @@
 # Module 0, the Gate: which events may become videos, and whether one can start now.
-# Decided Nov 26 (Jan, decisions page "Stringer Gate Decisions"). Environment variables override a few
-# of these on the site: GATE_MODE, GATE_STORE, GATE_SALT (see stringer/gate/__init__.py).
+# Decided Nov 26 (Jan, decisions page "Stringer Gate Decisions"). Two environment variables are read on
+# the site: GATE_MODE (overrides `mode` below; stringer/gate/core.py) and GATE_STORE (where the records
+# live; stringer/gate/store.py). The salt for visitor hashes is made once and kept in the store (salt.json).
 
 [eligibility]                    # settled Nov 23
 categories = ["conflict", "political", "economic", "disaster", "humanitarian"]
@@ -9,17 +10,23 @@ min_confidence = 31              # Developing or Verified, not Unconfirmed
 min_reports = 7
 
 [limits]
-mode = "open"                    # open: anyone can make a video from the front page (Jan, Nov 26); closed: gallery only
+mode = "open"                    # open: anyone who is signed in can make a video (Columbia accounts, Jan Nov 27);
+                                 # closed: no list and no new videos
 videos_per_day = 10              # a count, not dollars (Jan: 30 on Nov 26, 10 on Nov 27)
 day_timezone = "America/New_York"
 per_visitor_per_hour = 3
 at_once = 3                      # videos being made at the same time, whole site
 max_video_usd = 5.00             # checked before money is spent: the estimate at start and after the searches
 claim_lease_minutes = 20         # a video with no progress for this long counts as crashed
-max_tries = 3                    # crashed runs per event; a pipeline "no video" is final
-tavily_min_credits = 30          # pause new videos below this many Tavily credits left
+max_tries = 3                    # starts per event (every start counts, crashed or not); a pipeline "no video" is final
+tavily_min_credits = 60          # pause new videos below this many Tavily credits left: 3 videos at once x 20
+                                 # (a test story used at most 12; one video's hard stop is 40, pipeline.TAVILY_LIMIT).
+                                 # It was 30, less than one video may spend (Nov 27 review)
 tavily_check_minutes = 10        # how long one look at Tavily's credit count is reused
-beat_seconds = 60                # how often a running video tells the Gate it is still alive
+voice_min_credits = 1500         # pause new videos below this many ElevenLabs credits left: 3 videos at once x 500
+                                 # (a video's voice takes about 250). The voice is a video's last paid step
+voice_check_minutes = 10         # how long one look at ElevenLabs' credit count is reused
+beat_seconds = 60                # a running video tells the Gate it is alive when a step ends, at most this often
 
 [reports]
 hide_after = 1                   # viewer reports that hide a video until Jan looks (Jan, Nov 26)
@@ -31,7 +38,9 @@ reasons = ["child_victim", "wrong_facts", "one_sided", "offensive", "other"]
 # wasting five dollars"). Each step's tokens are the 95th percentile per story in the call log
 # (stringer_private/runs/calls-*.jsonl, Nov 24-26 runs); prices come from the step's model in
 # config/models.toml, so switching a step to a dearer model raises the estimate too.
-# per_article: the tokens are for `articles_p95` articles and scale with the real count after Gather.
+# per_article: the tokens are for `articles_p95` articles and scale with the number the pick chose (at most 10).
+# The numbers are on the safe side: the estimate at the click is about $0.66, a real video costs $0.12-0.22
+# (four runs, Nov 27). script_line_check, script_words and voice_direction are round guesses, not percentiles.
 
 [cost]
 articles_p95 = 19                # articles step 1 read per story (95th percentile)
@@ -40,10 +49,11 @@ tavily_credits = 12              # most credits one test story used (median 7)
 voice_and_render_usd = 0.10      # ElevenLabs voice plus the render (module 8 average about $0.07)
 
 [cost.steps]
-# step = [input tokens, output tokens, stage]; stage "start" runs before the searches end
+# step = [input tokens, output tokens, stage]; stage "start": already paid when the second check runs
+# (after the searches, the same-story filter and the pick), so it is left out of that second estimate
 query_writer = [813, 192, "start"]
 lens = [7186, 806, "start"]
-same_story = [23045, 6693, "after_gather"]
+same_story = [23045, 6693, "start"]
 brief_read = [62071, 34246, "after_gather"]      # per_article
 brief_merge = [24924, 10126, "after_gather"]
 brief_blind = [19712, 1785, "after_gather"]

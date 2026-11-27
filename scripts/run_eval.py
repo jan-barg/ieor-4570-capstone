@@ -30,7 +30,8 @@ def main(argv=None):
         p.add_argument("--model", help="alias from config/models.toml, or code:<baseline>")
         p.add_argument("--split", default="tune", choices=["tune", "holdout", "all"])
         p.add_argument("--only", nargs="*", help="event short ids")
-        p.add_argument("--all-stories", action="store_true", help="every frozen story, not just labeled ones")
+        p.add_argument("--all-stories", action="store_true",
+                       help="every frozen story, not just labeled ones (same_story only; other steps refuse it)")
         p.add_argument("--opt", action="append", default=[], help="step option key=value (e.g. batch=25)")
     pr = sub.choices["run"]
     pr.add_argument("--cap", type=float, default=runner.DEFAULT_CAP_USD, help="hard cost cap in USD")

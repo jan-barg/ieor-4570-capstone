@@ -27,7 +27,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 
-from .. import models
+from .. import calls, models
 from .rules import field as ev_field
 
 VERSION = "child-4"         # the default since Nov 26 (Jan's narrower rule; eval: 3 of 3 refusals, 1 open call)
@@ -254,14 +254,7 @@ def keyword_verdict(event, *, by: str = "code:keywords") -> Verdict:
 
 # ---- the check -------------------------------------------------------------------------------------
 
-def _call(complete, messages, params, name):
-    """One call; a failed call counts as an empty answer. The eval's cost cap passes through."""
-    try:
-        return complete(messages, name=name, **params).text or "", None
-    except Exception as e:
-        if type(e).__name__ == "BudgetExceeded":
-            raise
-        return "", f"{type(e).__name__}: {e}"[:300]
+_call = calls.call      # one call; a failed call counts as an empty answer (stringer/calls.py)
 
 
 def judge(event, complete=None, *, model: str = "", prompt: str = VERSION, name: str = "gate_policy") -> Verdict:
@@ -299,8 +292,5 @@ def judge(event, complete=None, *, model: str = "", prompt: str = VERSION, name:
 
 
 def live_complete(step: str = "gate_policy", trace_id=None, metadata=None, model: str | None = None):
-    """A `complete` for the site: models.complete with the model config/models.toml names for the step."""
-    def complete(messages, name=None, **params):
-        return models.complete(step, messages, model=model, trace_id=trace_id, name=name, metadata=metadata,
-                               **params)
-    return complete
+    """A `complete` for live runs of this step (calls.live_complete with this module's step as the default)."""
+    return calls.live_complete(step, trace_id=trace_id, metadata=metadata, model=model)

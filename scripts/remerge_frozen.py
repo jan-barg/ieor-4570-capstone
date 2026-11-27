@@ -8,7 +8,8 @@ By default it spends nothing: the Tavily and Guardian clients run offline (a mis
 stops that story), and the saved queries are reused, so the query-writing model isn't called. Use it
 after changing merge rules, cut-offs or outlet labels. --new-searches lets Tavily run only the
 searches that have no saved response (e.g. a search added to the plan), under a hard credit cap;
-the Guardian stays offline. gather.json keeps the original freeze's cost, time and trace, and
+the Guardian stays offline. With --new-searches, a story whose local press was added after the freeze
+also makes one small paid call to the query writer, outside that credit cap. gather.json keeps the original freeze's cost, time and trace, and
 records the rebuild (and any new credits) under "remerged"."""
 from __future__ import annotations
 

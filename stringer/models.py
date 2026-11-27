@@ -74,6 +74,34 @@ def _tell_call(info: dict) -> None:
             pass
 
 
+# Time limits while a live video is being made: {step: seconds} from config/models.toml's [live_timeouts],
+# None outside one. Process-wide, like the cost listeners: one video per process on Cloud Run.
+_live_timeouts: dict | None = None
+
+
+@contextlib.contextmanager
+def live_timeouts(table: dict | None = None):
+    """While inside the block, a model call may take at most its step's limit from [live_timeouts] (or the
+    table given), even where the module asks for longer. Modules keep generous limits for eval runs; a
+    video a viewer is waiting for cannot wait ten minutes on one stuck call."""
+    global _live_timeouts
+    before = _live_timeouts
+    _live_timeouts = dict(table if table is not None else (config().get("live_timeouts") or {}))
+    try:
+        yield _live_timeouts
+    finally:
+        _live_timeouts = before
+
+
+def _log_call(**kw) -> None:
+    """One line in the call log and Langfuse. Never raises: by now the answer is paid for (or the real
+    error is on its way up), and losing either to a logging hiccup would be worse than a missing line."""
+    try:
+        tracer().generation(**kw)
+    except Exception:
+        pass
+
+
 def _tell_listeners(step, alias, cost: dict) -> None:
     with _listeners_lock:
         fns = list(_listeners)
@@ -192,14 +220,18 @@ def complete(step: str | None = None, messages: list[dict] | None = None, *, mod
     alias = model or model_for(step)
     kw = call_kwargs(alias, messages)
     kw.update(params)
+    if _live_timeouts:
+        limit = _live_timeouts.get(step or "") or _live_timeouts.get("default")
+        if limit:
+            kw["timeout"] = min(float(kw.get("timeout") or limit), float(limit))
     start = dt.datetime.now(dt.timezone.utc)
     try:
         resp = litellm.completion(**kw)
     except Exception as e:
         end = dt.datetime.now(dt.timezone.utc)
-        tracer().generation(name=name or step or alias, model=alias, litellm_model=kw["model"],
-                            trace_id=trace_id, input=messages, usage={}, cost={}, start=start,
-                            end=end, metadata=dict(metadata or {}, step=step), error=repr(e)[:500])
+        _log_call(name=name or step or alias, model=alias, litellm_model=kw["model"],
+                  trace_id=trace_id, input=messages, usage={}, cost={}, start=start,
+                  end=end, metadata=dict(metadata or {}, step=step), error=repr(e)[:500])
         _tell_call(dict(step=step, name=name or step or alias, model=alias, usd=0.0, tokens_in=0, tokens_out=0,
                         seconds=round((end - start).total_seconds(), 3), error=repr(e)[:200]))
         raise
@@ -207,9 +239,9 @@ def complete(step: str | None = None, messages: list[dict] | None = None, *, mod
     usage = usage_from(resp)
     cost = cost_of(alias, usage)
     text = resp.choices[0].message.content or ""
-    tracer().generation(name=name or step or alias, model=alias, litellm_model=kw["model"],
-                        trace_id=trace_id, input=messages, output=text, usage=usage, cost=cost,
-                        start=start, end=end, metadata=dict(metadata or {}, step=step))
+    _log_call(name=name or step or alias, model=alias, litellm_model=kw["model"],
+              trace_id=trace_id, input=messages, output=text, usage=usage, cost=cost,
+              start=start, end=end, metadata=dict(metadata or {}, step=step))
     _tell_listeners(step, alias, cost)
     _tell_call(dict(step=step, name=name or step or alias, model=alias, usd=cost["total"], tokens_in=usage["prompt"],
                     tokens_out=usage["output"], seconds=round((end - start).total_seconds(), 3), error=None))

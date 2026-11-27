@@ -22,13 +22,11 @@ import datetime as dt
 import json
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from stringer import paths
 from stringer import progress as P
-from stringer.gate import MESSAGES
 from stringer.gate.core import safe_id
 
 NY = ZoneInfo("America/New_York")
@@ -117,50 +115,71 @@ def last_ticket(rec: dict, want: tuple = ("done", "no_video", "failed")) -> str 
 
 
 # ---- a finished run's files (the private bucket on the site, the Mac's live story folder otherwise) ---------
-class Files:
-    """read(event, ticket, name) -> the parsed file, or None. Cached: a finished run's files never change."""
+MISS_S = 60          # a file that wasn't there is asked for again after this long (it may land later)
 
-    def __init__(self, bucket: str | None = None, local: Path | None = None, opener=None):
+
+class Files:
+    """read(event, ticket, name) -> the parsed file, or None.
+
+    The bucket keeps one event's newest run at stories/<event>/ (scripts/run_job.py: a rerun overwrites it),
+    with run.json naming its ticket; runs before Nov 27 kept a folder per ticket, stories/<event>/<ticket>/.
+    A file is read from the event's folder only while run.json names the ticket asked for, so an older
+    video's receipts never come from a newer run. Found files are kept; misses are asked again after MISS_S."""
+
+    def __init__(self, bucket: str | None = None, local: Path | None = None, opener=None, clock=time.monotonic):
         self.bucket = bucket
         self.local = Path(local or paths.PRIVATE / "live" / "stories")
         self._open = opener
+        self._clock = clock
         self._cache: dict = {}
         self._lock = threading.Lock()
 
+    def _get(self, name: str):
+        """One object from the private bucket, parsed, or None."""
+        from stringer import cloud
+        r = (self._open or cloud.open_object)(self.bucket, name)
+        try:
+            if r.status_code != 200:
+                return None
+            body = b"".join(r.iter_content(256 * 1024)).decode("utf-8")
+        finally:
+            r.close()
+        if name.endswith(".jsonl"):
+            return [json.loads(x) for x in body.split("\n") if x.strip()]
+        return json.loads(body)
+
     def _fetch(self, eid: str, tid: str | None, name: str):
+        e = safe_id(eid)
         if self.bucket:
-            from stringer import cloud
-            opener = self._open or cloud.open_object
-            if not tid:
-                return None
-            r = opener(self.bucket, f"stories/{safe_id(eid)}/{safe_id(tid)}/{name}")
-            try:
-                if r.status_code != 200:
-                    return None
-                body = b"".join(r.iter_content(256 * 1024)).decode("utf-8")
-            finally:
-                r.close()
-        else:
-            cands = ([self.local / safe_id(eid) / safe_id(tid) / name] if tid else []) + [self.local / safe_id(eid) / name]
-            hit = next((p for p in cands if p.exists()), None)
-            if hit is None:
-                return None
-            body = hit.read_text(encoding="utf-8")
+            note = self.read(eid, None, "run.json") if name != "run.json" else None
+            if name == "run.json" or not tid or (note or {}).get("ticket") == tid:
+                hit = self._get(f"stories/{e}/{name}")
+                if hit is not None or not tid:
+                    return hit
+            return self._get(f"stories/{e}/{safe_id(tid)}/{name}")
+        cands = ([self.local / e / safe_id(tid) / name] if tid else []) + [self.local / e / name]
+        hit = next((p for p in cands if p.exists()), None)
+        if hit is None:
+            return None
+        body = hit.read_text(encoding="utf-8")
         if name.endswith(".jsonl"):
             return [json.loads(x) for x in body.split("\n") if x.strip()]
         return json.loads(body)
 
     def read(self, eid: str, tid: str | None, name: str):
         k = (eid, tid, name)
+        now = self._clock()
         with self._lock:
-            if k in self._cache:
-                return self._cache[k]
+            hit = self._cache.get(k)
+        # run.json changes with each rerun: kept like a miss, so a new run is seen within MISS_S
+        if hit is not None and (hit[1] is not None and name != "run.json" or now - hit[0] < MISS_S):
+            return hit[1]
         try:
             v = self._fetch(eid, tid, name)
         except Exception:
-            return None                                  # not cached: try again next time
+            return None                                  # not kept: try again next time
         with self._lock:
-            self._cache[k] = v
+            self._cache[k] = (now, v)
         return v
 
     def reader(self, eid: str, tid: str | None):

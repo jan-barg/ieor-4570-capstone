@@ -14,7 +14,7 @@ JSON the pages read (the shapes of the designs' window.STRINGER_DEMO and window.
     GET  /admin/api           everything the desk shows      } both need the header X-Admin-Token:
     POST /admin/api/<action>  take_down, restore, remake,    } <GATE_ADMIN_TOKEN>
                               pause, open ({"event", "note", "keep_up"})
-    GET  /status?event=<id>   one event's record (the deploy test page's poll; kept)
+    GET  /status?event=<id>   what a visitor may see of one event (the Gate's view; the deploy test page's poll)
     GET  /media/videos/<event>/<ticket>/<file>   a finished video, poster or captions, streamed from the
                               private video bucket (with Range, so the player can seek); on the Mac, from the
                               run's own folder
@@ -35,7 +35,6 @@ import datetime as dt
 import gzip
 import hashlib
 import hmac
-import html
 import json
 import mimetypes
 import os
@@ -50,7 +49,7 @@ from urllib.parse import parse_qs, urlparse
 
 from stringer import cloud, feed, paths, pipeline
 from stringer import progress as prog
-from stringer.gate import MESSAGES, Gate, TooCostly
+from stringer.gate import MESSAGES, Gate, TooCostly, VideoOverBudget
 from stringer.gate.core import safe_id
 
 from . import data as D
@@ -95,6 +94,7 @@ class Site:
         self._runs: dict = {}                       # finished runs' progress views never change
         self._geo: tuple[bytes, bytes] | None = None
         self._geo_lock = threading.Lock()
+        self._watch: dict[str, tuple[float, bool]] = {}   # /media answers, kept 30 s (a player asks in pieces)
 
     # ---- the list, refreshed from the feed every few minutes ---------------------------------------------
     def refresh(self) -> None:
@@ -146,9 +146,37 @@ class Site:
         return rec or {}
 
     def record(self, event_id: str) -> dict:
-        rec = self.get_record(event_id)
-        return {"state": rec.get("state"), "video": self.video_urls(event_id, rec), "why": rec.get("no_video_reason"),
-                "hidden": bool(rec.get("hidden"))}
+        """What a visitor may see of one event: the Gate's view (gate.view), never the raw record, which says
+        "making" after a run has crashed and still holds a taken-down video."""
+        eid = safe_id(event_id)
+        v = self.gate.view(eid)
+        state = {"has_video": "done", "ready": None}.get(v["state"], v["state"])
+        video = self.video_urls(eid, self.get_record(eid)) if v["state"] == "has_video" else None
+        return {"state": state, "video": video, "why": v.get("reason"), "failed": bool(v.get("failed"))}
+
+    def may_watch(self, name: str) -> bool:
+        """May /media serve videos/<event>/<ticket>/<file>? Only the files of the video the event shows now
+        (gate.may_watch), remembered 30 s. Runs made on the Mac saved file paths, not /media addresses: there
+        the address is the one video_urls gives."""
+        now = time.time()
+        hit = self._watch.get(name)
+        if hit and now - hit[0] < 30:
+            return hit[1]
+        ok = self.gate.may_watch(name)
+        if not ok and not os.environ.get("STRINGER_VIDEO_BUCKET"):
+            eid = name.split("/")[1]
+            if self.gate.view(eid)["state"] == "has_video":
+                urls = self.video_urls(eid, self.get_record(eid)) or {}
+                folder = "/media/" + name.rsplit("/", 1)[0] + "/"
+                ok = str(urls.get("src") or "").startswith(folder)
+        if len(self._watch) > 500:
+            self._watch.clear()
+        self._watch[name] = (now, ok)
+        return ok
+
+    def forget_watch(self, eid: str) -> None:
+        """A video was hidden or changed here: stop serving it at once on this machine."""
+        self._watch = {k: v for k, v in self._watch.items() if k.split("/")[1:2] != [eid]}
 
     # ---- the click -----------------------------------------------------------------------------------------
     def make(self, event_id: str, visitor: str) -> dict:
@@ -160,12 +188,21 @@ class Site:
         if not d.ok:
             return {"ok": False, "code": d.code, "message": d.message, "video": d.video,
                     "retry_after_s": d.retry_after_s}
-        self.gate.store.update(f"raw_events/{safe_id(event_id)}.json", lambda cur: (raw, None))
-        if os.environ.get("STRINGER_JOB"):
-            cloud.start_job(cloud.setting("STRINGER_PROJECT"), cloud.setting("STRINGER_REGION", "us-east1"),
-                            cloud.setting("STRINGER_JOB"), [event_id])
-        else:
-            threading.Thread(target=self._make_here, args=(raw, d.ticket), daemon=True).start()
+        try:
+            self.gate.store.update(f"raw_events/{safe_id(event_id)}.json", lambda cur: (raw, None))
+            if os.environ.get("STRINGER_JOB"):
+                cloud.start_job(cloud.setting("STRINGER_PROJECT"), cloud.setting("STRINGER_REGION", "us-east1"),
+                                cloud.setting("STRINGER_JOB"), [event_id])
+            else:
+                threading.Thread(target=self._make_here, args=(raw, d.ticket), daemon=True).start()
+        except Exception as e:
+            # The video never began. Give the click back (the claim, the slot, the day's and the visitor's
+            # count), or the event would show "being made" for 20 minutes with nothing running.
+            print(f"could not start the video for {safe_id(event_id)}: {e!r}"[:300])
+            d.ticket.cancel(f"the job could not be started: {e!r}")
+            self.get_record(event_id)
+            return {"ok": False, "code": "start_failed",
+                    "message": "The video couldn't start just now. Please try again in a minute."}
         self.get_record(event_id)
         return {"ok": True, "code": "making", "message": "Making the video. This takes a few minutes.",
                 "ticket": d.ticket.id, "progress": f"/progress?event={event_id}"}
@@ -173,7 +210,7 @@ class Site:
     def _make_here(self, raw: dict, ticket) -> None:
         try:
             rec = pipeline.run(raw, ticket)
-        except TooCostly as e:
+        except (TooCostly, VideoOverBudget) as e:
             ticket.finish(no_video=f"too costly: {e}")
             return
         except Exception as e:
@@ -181,6 +218,8 @@ class Site:
             return
         if rec["outcome"] == "done":
             ticket.finish(video=dict(rec["video"], seconds=rec["seconds"], usd=rec["usd"]))
+        elif rec["outcome"] == "planned":
+            ticket.cancel("a plan-only run")
         else:
             ticket.finish(no_video=rec["why"])
 
@@ -194,6 +233,8 @@ class Site:
         if rec.get("state") != "done":
             return {"ok": False, "message": "You can report a video once it's up."}
         out = self.gate.report(eid, visitor, reason, note)
+        if out.get("hidden"):
+            self.forget_watch(eid)
         self.get_record(eid)
         return out
 
@@ -283,7 +324,7 @@ class Site:
         tid = D.last_ticket(rec)
         if not tid:
             return None, None
-        running = rec.get("state") == "making" and (rec.get("ticket") or {}).get("id") == tid
+        running = self.running(rec) and (rec.get("ticket") or {}).get("id") == tid
         if not running and (eid, tid) in self._runs:
             return self._runs[(eid, tid)], tid
         doc, _ = self.gate.store.get(prog.key_for(eid, tid))
@@ -322,7 +363,7 @@ class Site:
             return None
         t = rec.get("ticket") or {}
         by = None
-        if rec.get("state") == "making" and t.get("visitor"):
+        if self.running(rec) and t.get("visitor"):
             by = "you" if t["visitor"] == self.gate.visitor_key(visitor) else "another student"
         video = self.video_urls(eid, rec) if rec.get("state") == "done" and not rec.get("hidden") else None
         st = self.gate.status()
@@ -339,23 +380,23 @@ class Site:
                 "videosPerDay": st["videos_per_day"], "beingMade": st["being_made"], "atOnce": st["at_once"],
                 "youThisHour": vs["this_hour"], "perPersonPerHour": vs["per_hour"],
                 "retryAfterS": vs["retry_after_s"], "reportsToday": vs["reports_today"],
-                "reportsPerDay": vs["reports_per_day"], "searchesLow": st["searches_low"],
+                "reportsPerDay": vs["reports_per_day"], "searchesLow": st["searches_low"], "voiceLow": st.get("voice_low", False),
                 "estimatePerVideo": round(float(st["estimate_usd"]), 2), "capPerVideo": float(self.gate.lim["max_video_usd"]),
                 "minutesPerVideo": D.MINUTES_PER_VIDEO}
 
+    def running(self, rec: dict) -> bool:
+        """A run holds the event and has shown life lately (the Gate's own test: a crashed run's record
+        still says "making")."""
+        return rec.get("state") == "making" and self.gate._fresh(rec.get("ticket"))
+
     def row_state(self, rec: dict, listed: str) -> str:
-        """An event row's state from its record: a video that finished, failed or was hidden since the list
-        was made shows so at once (the list alone would say "ready" until its next refresh)."""
-        if rec.get("hidden"):
-            return "hidden"
-        st = rec.get("state")
-        if st == "done":
-            return "has_video"
-        if st == "no_video":
-            return "no_video"
-        if st == "making":
-            return "making" if self.gate._fresh(rec.get("ticket")) else "ready"
-        return "ready" if listed in ("making", "has_video") else listed
+        """An event row's state from its record, read the way gate.view reads it: a video that finished,
+        failed or was hidden since the list was made shows so at once (the list alone would say "ready"
+        until its next refresh). From the records already in memory: one store read per event on every
+        poll would be too many."""
+        code, _ = self.gate._state(rec)
+        return {"go": "ready", "has_video": "has_video", "making": "making", "no_video": "no_video",
+                "taken_down": "hidden", "too_many_tries": "no_video"}.get(code, listed)
 
     def front(self, visitor: str, email: str | None = None) -> dict:
         """The front page's data: window.STRINGER_DEMO's shape, on real records."""
@@ -383,7 +424,7 @@ class Site:
             if state == "has_video":
                 row["video"] = eid
             if state == "no_video":
-                row["reason"] = rec.get("no_video_reason") or ""
+                row["reason"] = rec.get("no_video_reason") or MESSAGES["too_many_tries"]
             if state == "making":
                 t = rec.get("ticket") or {}
                 doc = None
@@ -503,7 +544,7 @@ class Site:
         for v in (ledgers[days[0]].get("videos") or []):
             for k, u in (v.get("parts") or {}).items():
                 per_step[k] = round(per_step.get(k, 0.0) + float(u or 0), 6)
-        making = [r for r in records.values() if r.get("state") == "making"]
+        making = [r for r in records.values() if self.running(r)]
         making_rows = []
         for r in making:
             t = r.get("ticket") or {}
@@ -592,6 +633,7 @@ class Site:
         with self.lock:
             self.records[eid] = rec
         self._receipts = {k: v for k, v in self._receipts.items() if k[0] != eid}
+        self.forget_watch(eid)
         return {"ok": True, "record": {"hidden": bool(rec.get("hidden")), "keep_up": bool(rec.get("keep_up")),
                                        "state": rec.get("state")}}
 
@@ -731,9 +773,9 @@ def handler_for(site: Site):
             if not MEDIA.fullmatch(name):
                 return self._send(404, "not found", "text/plain")
             eid = name.split("/")[1]
-            rec = site.get_record(eid)
-            gone = rec.get("hidden") or (not rec.get("video") and rec.get("state") != "done")
-            if gone and not site.media_pass_ok(name, q or {}):   # hidden: only with the review desk's pass
+            # only the files of the video its event shows now (not a taken-down or replaced one's), except
+            # on the review desk, whose links carry a pass that ends in an hour
+            if not site.may_watch(name) and not site.media_pass_ok(name, q or {}):
                 return self._send(404, "not found", "text/plain")
             bucket = os.environ.get("STRINGER_VIDEO_BUCKET")
             if not bucket:
@@ -842,7 +884,10 @@ def handler_for(site: Site):
                     out = None
                 return self._json(out) if out else self._json({"error": "no receipts for this story"}, 404)
             if u.path == "/status" and q.get("event"):
-                return self._json(site.record(q["event"][0]))
+                try:
+                    return self._json(site.record(q["event"][0]))
+                except ValueError:                       # not an event id at all
+                    return self._send(400, "bad event id", "text/plain")
             if u.path == "/admin/api":
                 if not site.admin_token:
                     return self._json({"error": "The admin token isn't set up yet (GATE_ADMIN_TOKEN)."}, 503)

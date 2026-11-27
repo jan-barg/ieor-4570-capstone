@@ -146,3 +146,47 @@ def test_smoke_shortlist_answers_and_reports_cache():
         assert "cached_tokens_call2" in r
     caching = {r["model"]: r["cached_tokens_call2"] for r in results if r.get("calls")}
     assert caching.get("deepseek-v4.1-flash", 0) > 2000   # automatic cache seen Nov 24
+
+
+def _fake_litellm(monkeypatch, seen):
+    """models.complete with LiteLLM replaced: records the call's keyword arguments, answers "ok"."""
+    import sys
+    from types import SimpleNamespace
+
+    def completion(**kw):
+        seen.append(kw)
+        usage = SimpleNamespace(prompt_tokens=100, completion_tokens=10, prompt_tokens_details=None,
+                                completion_tokens_details=None)
+        return SimpleNamespace(usage=usage, choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion, suppress_debug_info=False))
+    monkeypatch.setattr(models.keys, "get", lambda name: "k")
+
+
+def test_live_time_limits_cap_a_call_only_inside_the_block(monkeypatch):
+    seen = []
+    _fake_litellm(monkeypatch, seen)
+    msgs = [{"role": "user", "content": "x"}]
+    models.complete("brief_merge", msgs, model="haiku-5-5", timeout=600)
+    with models.live_timeouts({"default": 90, "brief_merge": 80, "lens": 20}):
+        models.complete("brief_merge", msgs, model="haiku-5-5", timeout=600)        # the module asks for 600
+        models.complete("lens", msgs, model="haiku-5-5", timeout=5)                 # a shorter ask stays
+        models.complete("same_story", msgs, model="haiku-5-5")                      # no ask at all: the default
+        models.complete(None, msgs, model="haiku-5-5", timeout=600)
+    models.complete("brief_merge", msgs, model="haiku-5-5", timeout=600)
+    assert [c.get("timeout") for c in seen] == [600, 80, 5, 90, 90, 600]
+    table = models.config()["live_timeouts"]
+    assert table["default"] > 0 and set(models.config()["steps"]) - {"gate_policy", "brief_onecall"} <= set(table)
+
+
+def test_a_logging_error_never_loses_a_paid_answer(monkeypatch):
+    seen = []
+    _fake_litellm(monkeypatch, seen)
+
+    class Broken:
+        def generation(self, **kw):
+            raise RuntimeError("the log is down")
+    monkeypatch.setattr(models, "tracer", lambda: Broken())
+    costs = []
+    with models.on_cost(lambda step, alias, usd: costs.append(usd)):
+        r = models.complete("lens", [{"role": "user", "content": "x"}], model="haiku-5-5")
+    assert r.text == "ok" and len(costs) == 1 and costs[0] > 0

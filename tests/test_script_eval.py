@@ -85,7 +85,9 @@ def test_eval_runs_the_script_and_judges_with_no_plants_by_default(tmp_path):
     rec = runner.run_eval(step, model="sonnet-5-5", cap_usd=2.0, out_dir=tmp_path / "evals", complete_fn=fake,
                           split="all", use_cache=False)
     assert rec["status"] == "done", rec["items_detail"][0]["error"]
-    assert fake.kinds == ["script", "line_check", "wording", "coverage", "who_says"]      # no planted-mistakes call
+    # the line check and the wording check run side by side, so either may come first; no planted-mistakes call
+    assert fake.kinds[0] == "script" and sorted(fake.kinds[1:3]) == ["line_check", "wording"]
+    assert fake.kinds[3:] == ["coverage", "who_says"]
     s = rec["summary"]
     assert s["first_clean"] == 1.0 and s["videos"] == 1.0 and s["failures"] == 0
     assert s["rules_final_ok"] == 1.0 and s["on_screen_final_ok"] == 1.0
@@ -104,7 +106,8 @@ def test_plants_still_run_when_asked(tmp_path):
     fake = FakeModel()
     rec = runner.run_eval(step, model="sonnet-5-5", cap_usd=2.0, out_dir=tmp_path / "evals", complete_fn=fake,
                           split="all", use_cache=False)
-    assert fake.kinds == ["script", "line_check", "wording", "coverage", "who_says", "line_check"]
+    assert fake.kinds[0] == "script" and sorted(fake.kinds[1:3]) == ["line_check", "wording"]
+    assert fake.kinds[3:] == ["coverage", "who_says", "line_check"]
     s = rec["summary"]
     assert s["plants"] == 2 and s["plants_caught"] == 1.0 and s["plants_reached"] == 0
     assert sum(s["confusion"].values()) == 2

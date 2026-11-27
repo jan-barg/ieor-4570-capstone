@@ -480,14 +480,16 @@
       busy: { t: `${s.atOnce} videos are being made right now`, b: "That's the most at once. Try again in a few minutes." },
       closed: { t: 'New videos are paused right now', b: 'You can still watch everything already made.' },
       searches_low: { t: 'New videos are paused for now', b: "This month's news searches are almost used up. You can still watch everything already made." },
+      voice_low: { t: 'New videos are paused for now', b: "This month's narration is almost used up. You can still watch everything already made." },
     }[lim];
   }
-  const LIMIT_CODES = ['closed', 'searches_low', 'day_full', 'busy', 'visitor_pace'];
+  const LIMIT_CODES = ['closed', 'searches_low', 'voice_low', 'day_full', 'busy', 'visitor_pace'];
   const makingCount = () => Math.max(state.site.beingMade || 0, state.events.filter((e) => e.state === 'making').length);
   function liveLimit() {
     const s = state.site;
     if (!s.open) return 'closed';
     if (s.searchesLow) return 'searches_low';
+    if (s.voiceLow) return 'voice_low';
     if (s.videosToday >= s.videosPerDay) return 'day_full';
     if (makingCount() >= s.atOnce) return 'busy';
     if (s.youThisHour >= s.perPersonPerHour) return 'visitor_pace';
@@ -703,13 +705,14 @@
     if (LIMIT_CODES.includes(out.code)) {
       if (out.code === 'closed') state.site.open = false;
       if (out.code === 'searches_low') state.site.searchesLow = true;
+      if (out.code === 'voice_low') state.site.voiceLow = true;
       if (out.code === 'day_full') state.site.videosToday = state.site.videosPerDay;
       if (out.code === 'visitor_pace') { state.site.youThisHour = state.site.perPersonPerHour; if (out.retry_after_s != null) state.site.retryAfterS = out.retry_after_s; }
       if (out.code === 'busy') state.site.beingMade = state.site.atOnce;
       note = limitText(out.code, out);
       renderLimits();
     } else {
-      note = { t: out.message || D.gateMessages.unavailable, b: out.code === 'offline' ? '' : "Nothing was spent. You can pick another story.", icon: ICON.cross };
+      note = { t: out.message || D.gateMessages.unavailable, b: out.code === 'offline' ? '' : out.code === 'start_failed' ? 'Nothing was spent.' : "Nothing was spent. You can pick another story.", icon: ICON.cross };
     }
     if (here) transition(() => { $('#cf-body').innerHTML = stopHTML(e, note); });
     else toast(esc(note.t));

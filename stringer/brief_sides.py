@@ -20,7 +20,8 @@ Rules (decided Nov 23-25, Jan; system map, module 5 Settled):
   article, and even at 3+ sources many are facts the other side does report in a claim step 2 kept
   apart. A judge has to check that the fact is really missing from that side and that it matters.
 - Flags, a fixed list, each with a code rule, the step that reads it and what it does: thin side,
-  empty side, developing, too few articles (story); unrated only, low reliability (claim).
+  empty side, developing, too few articles (story); unrated only, low reliability (claim). "Too few
+  articles" is a note for the record and never stops a video (Jan, Nov 27).
 
     add_sides(step2, step1, articles, groups, lens, event) -> the step 3 part of the Story File
 """
@@ -29,6 +30,7 @@ from __future__ import annotations
 import re
 
 from . import clean, pick
+from .outlets import LOW_RELIABILITY
 from .brief_read import headline, norm
 
 VERSION = "sides-3"     # sides-3: shared wire text is measured on the reporting prose, quotations left out
@@ -36,9 +38,10 @@ VERSION = "sides-3"     # sides-3: shared wire text is measured on the reporting
                         # sides-2: the same sentence counts once only between articles that share wire text
                         #          (sides-1 also joined outlets quoting the same speaker)
 MIN_SILENT = 2          # blindspots only against a side with at least this many read articles (Nov 25)
-RELIABLE = 0.5          # a source scoring this or more can confirm a claim (Lin et al. reliability)
+RELIABLE = LOW_RELIABILITY   # a source scoring this or more can confirm a claim (Lin et al.; 0.5, set in outlets.py)
 DEVELOPING = 56         # event confidence under this is "developing" (Monitor the Situation's "Verified" is 56+)
-MIN_ARTICLES = 5        # fewer read articles than this: too few for a video
+MIN_ARTICLES = 5        # fewer read articles than this gets the "too few articles" flag. A note, not a stop:
+                        # the video is still made (Jan, Nov 27: "the way it works now is okay")
 SAME_SENTENCE_WORDS = 6 # a shorter quote inside a longer one counts as the same sentence from this length
 SHARED_TEXT = 0.10      # articles sharing this share of their prose's 8-word runs reuse wire text
                         # (quote-sharing pairs share 0-1% of prose, wire reuse 11-41%; tested Nov 25)
@@ -48,7 +51,7 @@ FLAGS = {   # code -> (who reads it, what it does)
     "thin side": ("step 3", "no blindspots against this side; the video says coverage from it was thin"),
     "empty side": ("step 4 and the video", "skipped in how each side tells it; the video says the side had no coverage"),
     "developing": ("the script writer", "hedges: details may still change"),
-    "too few articles": ("the pipeline", "no video"),
+    "too few articles": ("the pipeline", "noted in script.json (held) and pipeline.json; the video is still made"),
     "unrated only": ("the fact check", "stated as fact only if a source scoring 0.5 or more backs it; "
                                        "otherwise unconfirmed, or said with its source named"),
     "low reliability": ("the fact check", "stated as fact only if a source scoring 0.5 or more backs it; "
@@ -163,7 +166,9 @@ def claim_flags(claim: dict, by_id: dict) -> list[str]:
 def add_sides(step2: dict, step1: dict, articles: list[dict], groups: dict, lens: dict, event: dict) -> dict:
     """Step 3 for one story."""
     names = side_ids(lens)
-    read = {r["article"]: r for r in (step1 or {}).get("articles") or []}
+    # "read" means step 1 gave an answer for the article; one it failed on (a timeout, an unusable answer)
+    # was sent but not read, and must not count toward "we read N articles", thin sides or blindspots
+    read = {r["article"]: r for r in (step1 or {}).get("articles") or [] if not (r.get("checks") or {}).get("error")}
     sources = sources_of(articles, groups, names, read)
     by_id = {s["id"]: s for s in sources}
     shares = shared_text(articles)

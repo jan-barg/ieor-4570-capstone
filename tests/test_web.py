@@ -215,7 +215,7 @@ def test_admin_actions(monkeypatch, tmp_path, serve):
     assert [v["id"] for v in s.front("v")["videos"]] == [EID]
     assert act("remake", {"event": EID, "note": " "})["ok"] is False          # a remake needs a note
     out = act("remake", {"event": EID, "note": "The script misread the date."})
-    assert out["ok"] and out["record"] == {"hidden": False, "keep_up": False, "state": None}
+    assert out["ok"] and out["record"]["hidden"] is False and out["record"]["state"] is None
     d = s.admin()
     assert {v["id"]: v for v in d["videos"]}[EID]["status"] == "remake"       # the old video stays on the desk
     assert s.make(EID, "visitor-1")["ok"]                                     # it can be made again
@@ -239,7 +239,7 @@ def test_media_of_a_hidden_video_needs_the_admin_pass(monkeypatch, tmp_path, ser
     url = serve(s)
     path = f"/media/videos/{EID}/{tid}/poster.jpg"
     assert call(url, path)[2] == b"made-up poster"
-    s.gate.take_down(EID, by="jan")
+    s.admin_act("take_down", {"event": EID}, "jan")                         # this machine stops serving it at once
     assert call(url, path)[0] == 404
     signed = s.admin_link(path)
     assert signed.startswith(path + "?exp=") and call(url, signed)[2] == b"made-up poster"
@@ -340,40 +340,52 @@ def test_job_records_site_paths(monkeypatch, tmp_path):
     out.mkdir()
     for f in ("video.mp4", "poster.jpg"):
         (out / f).write_bytes(b"x")
-    (tmp_path / "script.json").write_text("{}")
     sent = []
     monkeypatch.setenv("STRINGER_VIDEO_BUCKET", "vids")
-    monkeypatch.setenv("STRINGER_PRIVATE_BUCKET", "priv")
     monkeypatch.setattr(run_job.cloud, "upload", lambda b, n, p, **kw: sent.append((b, n)) or "")
     rec = {"video": {"mp4": str(out / "video.mp4"), "duration_s": 60.0}, "seconds": 200.0, "usd": 0.5}
-    v = run_job.upload_outputs(tmp_path, rec, EID, "T1")
-    assert v["url"] == f"/media/videos/{EID}/T1/video.mp4" and server.MEDIA.fullmatch(v["url"][7:])
+    v = run_job.upload_media(rec, EVENT["id"], "T1")
+    assert v["url"] == f"/media/videos/{EVENT['id']}/T1/video.mp4" and server.MEDIA.fullmatch(v["url"][7:])
     assert v["poster"].endswith("/poster.jpg") and v["captions"] is None
-    assert ("priv", f"stories/{EID}/T1/script.json") in sent
-    assert all(b == "vids" for b, n in sent if n.startswith("videos/"))
+    assert sent and all(b == "vids" and n.startswith("videos/") for b, n in sent)
 
 
-def test_job_uploads_the_story_files_of_a_run_with_no_video(monkeypatch, tmp_path):
-    """So the site's "See what happened" can show the run: pipeline.json and the step files, no articles."""
-    from scripts import run_job
-    g = Gate(MemoryStore(), complete=None, model="", tavily_left=lambda: 500)
-    t = g.start(EVENT, "visitor-1").ticket
-    g.store.update(f"raw_events/{EID}.json", lambda cur: (EVENT, None))
-    monkeypatch.setattr(run_job, "Gate", lambda: g)
-    monkeypatch.setenv("STRINGER_WORK", str(tmp_path))
-    monkeypatch.setenv("STRINGER_PRIVATE_BUCKET", "priv")
-    sent = []
-    monkeypatch.setattr(run_job.cloud, "upload", lambda b, n, p, **kw: sent.append((b, n)) or "")
+def test_a_job_that_cannot_start_gives_the_click_back(monkeypatch, tmp_path):
+    s, _ = site(monkeypatch, tmp_path)
+    s.refresh()
+    monkeypatch.setenv("STRINGER_JOB", "stringer-make")
+    monkeypatch.setenv("STRINGER_PROJECT", "made-up-project")
 
-    def fake_run(raw, ticket, stories_dir, raw_dir):
-        d = stories_dir / raw["id"]
-        d.mkdir(parents=True)
-        for f in ("pipeline.json", "gather.json", "articles.jsonl"):
-            (d / f).write_text("{}")
-        return {"outcome": "no_video", "why": "script: too few claims"}
-    monkeypatch.setattr(run_job.pipeline, "run", fake_run)
-    assert run_job.main([EID]) == 0
-    names = {n for b, n in sent if b == "priv"}
-    assert names == {f"stories/{EID}/{t.id}/pipeline.json", f"stories/{EID}/{t.id}/gather.json"}
-    rec, _ = g.store.get(f"events/{EID}.json")
-    assert rec["state"] == "no_video" and "too few claims" in rec["no_video_reason"]
+    def no_start(*a, **kw):
+        raise ConnectionError("Cloud Run did not answer")
+    monkeypatch.setattr(server.cloud, "start_job", no_start)
+    r = s.make(EVENT["id"], "visitor-1")
+    assert not r["ok"] and r["code"] == "start_failed" and "try again" in r["message"]
+    st = s.gate.status()
+    assert st["videos_today"] == 0 and st["being_made"] == 0                   # nothing was used up
+    assert s.record(EVENT["id"])["state"] is None                              # not "making": the button is back
+    started = []
+    monkeypatch.setattr(server.cloud, "start_job", lambda *a, **kw: started.append(a) or "op")
+    assert s.make(EVENT["id"], "visitor-1")["ok"] and len(started) == 1        # and the same visitor can click again
+
+
+def test_a_crashed_run_shows_the_button_again_and_a_taken_down_video_is_not_served(monkeypatch, tmp_path):
+    import datetime as dt
+    now = [dt.datetime(2026, 12, 9, 15, 0, tzinfo=dt.timezone.utc)]
+    monkeypatch.delenv("STRINGER_JOB", raising=False)
+    monkeypatch.setenv("STRINGER_VIDEO_BUCKET", "vids")                       # the site's own rule, not the Mac's
+    g = Gate(MemoryStore(), complete=None, model="", tavily_left=lambda: 500, now=lambda: now[0])
+    s = server.Site(gate=g, fetch=lambda: [EVENT], files=D.Files(local=tmp_path))
+    eid = EVENT["id"]
+    t = g.start(EVENT, "visitor-1").ticket                    # a run that then dies without a word
+    assert s.record(eid)["state"] == "making"
+    now[0] += dt.timedelta(minutes=25)
+    assert s.record(eid) == {"state": None, "video": None, "why": None, "failed": True}
+    t2 = g.start(EVENT, "visitor-2").ticket
+    path = f"videos/{eid}/{t2.id}/video.mp4"
+    t2.finish(video={"url": "/media/" + path})
+    assert s.record(eid)["state"] == "done" and s.may_watch(path)
+    g.take_down(eid, by="jan")
+    s._watch.clear()                                          # (the 30-second memory of the last answer)
+    assert s.record(eid) == {"state": "unavailable", "video": None, "why": None, "failed": False}
+    assert not s.may_watch(path) and not s.may_watch(f"videos/{eid}/{t.id}/video.mp4")

@@ -5,12 +5,15 @@ The idea: every step's token use on the test stories is known (config/gate.toml,
 percentile per story), and every step's model has a price (config/models.toml). Multiply and add,
 plus searches and the voice. The Gate asks twice:
   1. at the click, with the usual number of articles ("start");
-  2. after the searches, with the real number of articles ("after_gather"), before the steps that
-     cost most. Too dear here means the video stops having spent only a few cents of searching.
+  2. after the searches, the same-story filter and the pick, with the number of articles that will be
+     read ("after_gather"), before the steps that cost most. Too dear here means the video stops having
+     spent only a few cents of searching.
 
-Example: with today's models a video estimates at about $0.70 at the click (the usual cost is about
-$0.26, so the estimate is on the safe side). Switching the script writer to Opus would raise it, and
-a story with 200 articles raises the second estimate, since reading scales with the articles."""
+Example: with today's models a video estimates at $0.66 at the click. A real video cost $0.12 to $0.22
+on the four live runs of Nov 27, so the estimate is well on the safe side (its script row alone assumes
+ten times the tokens the writer used). Switching the script writer to Opus would raise it. The second
+check cannot stop a video today: the pick reads at most 10 articles, and the estimate would need far
+more to reach $5. It is there for a dearer model or a bigger pick."""
 from __future__ import annotations
 
 from .. import models

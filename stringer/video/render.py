@@ -1,7 +1,8 @@
 """Step 5: hands the render plan and its audio to the Remotion project in render/ (settled Nov 26).
 
-On the Mac it runs `node render/render.mjs` here; the Cloud Run service `stringer-render` runs the same
-project (to be added). Prints nothing; returns render.mjs's one-line JSON report.
+It runs `node render/render.mjs` as a child process, on the Mac and inside the Cloud Run job that makes a
+video (one image holds Python, Node and headless Chrome). Prints nothing; returns render.mjs's one-line
+JSON report.
 
     render(plan_path, run_dir, out_mp4)                  -> {"file", "frames", "seconds", "render_seconds", ...}
     render(plan_path, run_dir, out_dir, mode="stills", extra=["--frames", "10,200"])

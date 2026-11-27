@@ -14,7 +14,6 @@ import tomllib
 from .. import paths
 
 CONFIG = paths.CODE / "config" / "gate.toml"
-RULES = ("category", "severity", "confidence", "reports")
 
 
 @functools.lru_cache(maxsize=1)

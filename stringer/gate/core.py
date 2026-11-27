@@ -12,6 +12,10 @@ What the website calls (decided Nov 26, Jan, decisions page "Stringer Gate Decis
     ticket.checkpoint(n_articles=...) after the searches: stops before the dear steps if the rest of
                                     the video would pass $5 (Jan: work the cost out before spending).
     ticket.finish(video=... | no_video=... | error=...)
+    ticket.cancel(why)           -> the click never became a video (the job could not start): everything
+                                    it took is given back
+    gate.view(event_id)          -> what a visitor may be shown for one event (the page and the video
+                                    address ask this, never the raw record)
     gate.report(event, visitor, reason, note)   the Report link; the first report hides the video
     gate.take_down / restore / remake / reports / hidden / log / status         the admin side
     gate.set_mode("closed" | "open", by, note)   the admin's pause button (kept in the store, module 9)
@@ -19,8 +23,8 @@ What the website calls (decided Nov 26, Jan, decisions page "Stringer Gate Decis
 
 The checks, cheapest first: the site is open; the event qualifies (rules.py); the content check
 allows it (policy.py, saved per event); it isn't taken down; it has no video and none is being made;
-Tavily has credits; the cost estimate is under $5 (cost.py); then the claim, the day's 30, the 3 at
-once and the visitor's 3 an hour. Every record is in the shared store (store.py), so the answers
+Tavily and the voice have credits; the cost estimate is under $5 (cost.py); then the claim, the day's
+10, the 3 at once and the visitor's 3 an hour. Every record is in the shared store (store.py), so the answers
 hold across Cloud Run machines.
 
 Example: two people click the same event a second apart. The first start() claims
@@ -39,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
 
-from . import cost, policy, rules
+from . import cost, credits, policy, rules
 from .store import NO_CHANGE, Store, store_from_env
 
 # Plain sentences the front page shows. Events the Gate refuses for what they are (too small, the
@@ -55,10 +59,13 @@ MESSAGES = {
     "visitor_pace": "You've started {n} videos this hour. Try again in {m} minutes.",
     "busy": "{n} videos are being made right now. Try again in a few minutes.",
     "searches_low": "New videos are paused for now: this month's news searches are used up.",
+    "voice_low": "New videos are paused for now: this month's narration is used up.",
     "not_eligible": UNAVAILABLE, "policy": UNAVAILABLE, "taken_down": UNAVAILABLE, "no_video": UNAVAILABLE,
     "too_many_tries": UNAVAILABLE, "too_costly": UNAVAILABLE,
 }
 SHOWN = ("go", "making", "has_video")     # what screen() keeps
+FALLBACK_LIFE_S = 600                     # how long a content answer from the keyword fallback is reused
+_DEFAULT = object()
 
 
 class VideoOverBudget(RuntimeError):
@@ -137,7 +144,8 @@ def tavily_credits_left() -> int | None:
 
 class Gate:
     def __init__(self, store: Store | None = None, *, cfg: dict | None = None, complete=None, model: str | None = None,
-                 now=None, tavily_left=tavily_credits_left, mode: str | None = None, workers: int = 8):
+                 now=None, tavily_left=tavily_credits_left, mode: str | None = None, workers: int = 8,
+                 voice_left=_DEFAULT):
         self.store = store or store_from_env()
         self.cfg = cfg or rules.config()
         self.lim = self.cfg["limits"]
@@ -146,6 +154,8 @@ class Gate:
         self._model = model
         self.now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self.tavily_left = tavily_left
+        self.voice_left = credits.voice_credits_left if voice_left is _DEFAULT else voice_left
+        self._voice_seen: tuple[float, int | None] | None = None
         self._mode_given = (mode or "").strip().lower() or None
         self._mode_default = (os.environ.get("GATE_MODE") or self.lim.get("mode", "open")).strip().lower()
         self._mode_seen: tuple[float, str] | None = None
@@ -234,6 +244,16 @@ class Gate:
         left = self._tavily_seen[1]
         return left is not None and left < self.lim["tavily_min_credits"]
 
+    def _voice_low(self) -> bool:
+        """The narrator's credits (ElevenLabs) are under the floor. Unknown counts as fine."""
+        floor = self.lim.get("voice_min_credits") or 0
+        if self.voice_left is None or not floor:
+            return False
+        if not self._voice_seen or time.monotonic() - self._voice_seen[0] > self.lim.get("voice_check_minutes", 10) * 60:
+            self._voice_seen = (time.monotonic(), self.voice_left())
+        left = self._voice_seen[1]
+        return left is not None and left < floor
+
     def _no(self, code: str, detail: str = "", **kw) -> Decision:
         n = {"day_full": self.lim["videos_per_day"], "busy": self.lim["at_once"],
              "visitor_pace": self.lim["per_visitor_per_hour"]}.get(code)
@@ -243,14 +263,21 @@ class Gate:
     # ---- the content check, saved per event ---------------------------------------------------------
     def verdict(self, event) -> dict:
         """The content check's answer for this event, from the saved one when the event's text, the
-        prompt and the model are unchanged; otherwise one check (model, else the keyword rule)."""
+        prompt and the model are unchanged; otherwise one check (model, else the keyword rule).
+
+        An answer the keyword rule gave because the model failed (fallback) is kept only FALLBACK_LIFE_S,
+        then the model is asked again. Kept for good, a two-minute outage would fix the cruder rule's
+        answer on every event listed in those minutes (it still refuses teenagers, which the model's
+        rule allows)."""
         eid = str(rules.field(event, "id"))
         h = policy.text_hash(event)
         rec, _ = self.store.get(self._ekey(eid))
         p = (rec or {}).get("policy")
         model = self.model if self.complete else ""
         if p and p.get("hash") == h and p.get("prompt") == policy.VERSION and (p.get("model") or "") == model:
-            return p
+            made = _parse(p.get("at"))
+            if not p.get("fallback") or (made and (self.now() - made).total_seconds() < FALLBACK_LIFE_S):
+                return p
         v = policy.judge(event, self.complete, model=model)
         p = dict(v.as_dict(), hash=h, at=_iso(self.now()))
 
@@ -317,7 +344,45 @@ class Gate:
         return {"mode": self.mode, "day": self.day(), "videos_today": slots["started"],
                 "videos_per_day": self.lim["videos_per_day"], "being_made": len(slots["active"]),
                 "at_once": self.lim["at_once"], "searches_low": self._searches_low(),
-                "estimate_usd": cost.estimate("start", cfg=self.cfg)["usd"]}
+                "voice_low": self._voice_low(), "estimate_usd": cost.estimate("start", cfg=self.cfg)["usd"]}
+
+    def view(self, event_id: str) -> dict:
+        """What a visitor may be shown for one event, worked out from its record the way check() and
+        start() do. The page's status call and the video address must ask this, not read the record:
+        the record says "making" long after a run has crashed, and still holds a taken-down video.
+
+            {"state": "ready",       "failed": True}     nothing running; `failed`: the last try crashed
+            {"state": "making"}                           a run holds the claim and has shown life lately
+            {"state": "has_video",   "video": {...}}
+            {"state": "no_video",    "reason": "..."}     the pipeline decided against it (final)
+            {"state": "unavailable"}                      taken down, or out of tries: show nothing of it
+        """
+        rec, _ = self.store.get(self._ekey(event_id))
+        rec = rec or {}
+        code, _detail = self._state(rec)
+        if code == "has_video":
+            return {"state": "has_video", "video": rec.get("video")}
+        if code == "making":
+            return {"state": "making"}
+        if code == "no_video":
+            return {"state": "no_video", "reason": rec.get("no_video_reason") or ""}
+        if code == "go":
+            return {"state": "ready", "failed": rec.get("state") in ("failed", "making")}
+        return {"state": "unavailable"}
+
+    def may_watch(self, media_path: str) -> bool:
+        """media_path: "videos/<event>/<ticket>/<file>", as the website's /media address has it. True only
+        for the files of the video that event shows now. A taken-down or replaced video's files stay in
+        the bucket; this keeps them from being served to someone who kept the address."""
+        parts = str(media_path).split("/")
+        if len(parts) != 4 or parts[0] != "videos":
+            return False
+        try:
+            v = self.view(parts[1])
+        except ValueError:
+            return False
+        url = str((v.get("video") or {}).get("url") or "")
+        return v["state"] == "has_video" and url.startswith(f"/media/videos/{parts[1]}/{parts[2]}/")
 
     def visitor_status(self, visitor: str) -> dict:
         """One visitor's own numbers: videos started in the last hour (and when the next is free), reports today."""
@@ -348,6 +413,8 @@ class Gate:
             return d
         if self._searches_low():
             return self._no("searches_low")
+        if self._voice_low():
+            return self._no("voice_low")
         est = cost.estimate("start", cfg=self.cfg)
         if est["usd"] > self.lim["max_video_usd"]:
             return self._no("too_costly", f"estimate ${est['usd']:.2f} over ${self.lim['max_video_usd']:.2f}")
@@ -385,7 +452,11 @@ class Gate:
             cur["started"] += 1
             cur["active"][tid] = {"event": eid, "started": _iso(now), "beat": _iso(now)}
             return cur, "ok"
-        r = self.store.update("slots.json", take_slot)
+        try:
+            r = self.store.update("slots.json", take_slot)
+        except Exception:                 # the store failed after the claim: don't leave the event "being made"
+            self._release_claim(ekey, tid)
+            raise
         if r != "ok":
             self._release_claim(ekey, tid)
             return self._no(r)
@@ -400,7 +471,12 @@ class Gate:
                 return NO_CHANGE, max(1, int(wait))
             cur["starts"] = starts + [_iso(now)]
             return cur, 0
-        wait = self.store.update(f"visitors/{vkey}.json", take_visitor)
+        try:
+            wait = self.store.update(f"visitors/{vkey}.json", take_visitor)
+        except Exception:
+            self._release_slot(tid, uncount=True)
+            self._release_claim(ekey, tid)
+            raise
         if wait:
             self._release_slot(tid, uncount=True)
             self._release_claim(ekey, tid)
@@ -409,14 +485,16 @@ class Gate:
         self._log("start", eid, ticket=tid, visitor=vkey, estimate_usd=est["usd"])
         return Decision(True, "go", MESSAGES["go"], ticket=Ticket(self, eid, tid, est["usd"]))
 
-    def _release_claim(self, ekey: str, tid: str) -> None:
+    def _release_claim(self, ekey: str, tid: str) -> bool:
+        """Puts the event's record back as it was before this ticket claimed it. False if the ticket no
+        longer holds the claim."""
         def undo(cur):
             if not cur or (cur.get("ticket") or {}).get("id") != tid:
-                return NO_CHANGE, None
+                return NO_CHANGE, False
             before = cur.pop("before", {}) or {}
             cur.update(state=before.get("state"), ticket=before.get("ticket"), tries=before.get("tries") or 0)
-            return cur, None
-        self.store.update(ekey, undo)
+            return cur, True
+        return bool(self.store.update(ekey, undo))
 
     def _release_slot(self, tid: str, uncount: bool = False) -> None:
         def undo(cur):
@@ -441,7 +519,7 @@ class Gate:
     # ---- reports and the admin side -----------------------------------------------------------------
     def report(self, event_id: str, visitor: str, reason: str, note: str = "") -> dict:
         """A viewer's report. Saved with its note, logged; the first one hides the video until Jan looks
-        (unless Jan restored it with keep_up). Each visitor can send 5 a day."""
+        (unless Jan restored it with keep_up, or the event has no video). Each visitor can send 5 a day."""
         eid = safe_id(event_id)
         vkey = self.visitor_key(visitor)
         now = self.now()
@@ -468,7 +546,10 @@ class Gate:
             cur = cur or {"id": eid}
             cur["reports"] = int(cur.get("reports") or 0) + 1
             cur["reports_since_review"] = int(cur.get("reports_since_review") or 0) + 1
-            hide = (not cur.get("hidden") and not cur.get("keep_up")
+            # only a video can be hidden: a report on an event with none is kept and logged, but must not
+            # take the event off the list before anyone has made it
+            hide = (cur.get("state") == "done" and bool(cur.get("video"))
+                    and not cur.get("hidden") and not cur.get("keep_up")
                     and cur["reports_since_review"] >= self.rep["hide_after"])
             if hide:
                 cur.update(hidden=True, hidden_by="reports", hidden_at=_iso(now))
@@ -503,13 +584,13 @@ class Gate:
                                                   reports_since_review=0))
 
     def remake(self, event_id: str, by: str, note: str = "") -> dict:
-        """Let an event be made again (Jan only): clears its video, "no video" and tries. A video hidden by
-        reports goes too: its old video is gone, so the hide has nothing left to hide."""
+        """Let an event be made again (Jan only): clears its video, "no video", tries and any hide, so a
+        video taken down for being wrong can be made afresh without first putting the wrong one back up."""
         def change(c):
             c.setdefault("history", []).append({"outcome": f"reset for a remake by {by}", "at": _iso(self.now()),
                                                 "video": c.get("video")})
-            c.update(state=None, ticket=None, tries=0, video=None, no_video_reason=None, hidden=False, hidden_by=None,
-                     keep_up=False, reports_since_review=0)
+            c.update(state=None, ticket=None, tries=0, video=None, no_video_reason=None, hidden=False,
+                     hidden_by=None, reports_since_review=0)
         return self._admin_set(event_id, "remake", by, note, change)
 
     def reports(self, event_id: str | None = None) -> list[dict]:
@@ -534,6 +615,7 @@ class Ticket:
     estimate_usd: float
     spent: float = 0.0
     parts: dict = field(default_factory=dict)
+    missed_beats: int = 0
     _last_beat: float = field(default_factory=time.monotonic)
 
     @property
@@ -548,15 +630,14 @@ class Ticket:
         if self.spent > self.cap:
             raise VideoOverBudget(f"spent ${self.spent:.2f}, over the ${self.cap:.2f} cap")
         if time.monotonic() - self._last_beat >= self.gate.lim["beat_seconds"]:
-            self.beat()
-
-    def wrap(self, complete):
-        """A complete() that charges each call's cost to this ticket (models.complete's signature)."""
-        def charged(*a, **kw):
-            r = complete(*a, **kw)
-            self.charge((getattr(r, "cost", None) or {}).get("total", 0.0), kw.get("name") or "model")
-            return r
-        return charged
+            try:
+                self.beat()
+            except ClaimLost:
+                raise
+            except Exception:
+                # The store could not be reached. One missed heartbeat is harmless (the claim lasts 20
+                # minutes and the next step tries again); ending a healthy, paid run over it is not.
+                self.missed_beats += 1
 
     def checkpoint(self, stage: str = "after_gather", n_articles: int | None = None) -> dict:
         """After the searches: will the rest fit under the cap? Raises TooCostly before it's spent."""
@@ -586,12 +667,39 @@ class Ticket:
             return cur, None
         g.store.update("slots.json", sl)
 
+    def cancel(self, why: str = "") -> bool:
+        """The click never became a video: the job could not be started, or the run was a plan-only test.
+        Gives back everything start() took: the claim on the event (its record goes back to what it was),
+        the at-once slot, the day's count and the visitor's start. Returns False if this ticket no longer
+        holds the claim.
+
+        Without this, a failed job start left the event "being made" for 20 minutes and used up one of
+        the day's videos and one of the visitor's three an hour."""
+        g = self.gate
+        ekey = g._ekey(self.event_id)
+        rec, _ = g.store.get(ekey)
+        mine = (rec or {}).get("ticket") or {}
+        mine = mine if mine.get("id") == self.id else {}
+        g._release_slot(self.id, uncount=True)
+        owned = g._release_claim(ekey, self.id)
+        if mine.get("visitor") and mine.get("started"):
+            def give_back(cur):
+                starts = list((cur or {}).get("starts") or [])
+                if mine["started"] not in starts:
+                    return NO_CHANGE, None
+                starts.remove(mine["started"])
+                return dict(cur, starts=starts), None
+            g.store.update(f"visitors/{mine['visitor']}.json", give_back)
+        g._log("start_cancelled", self.event_id, ticket=self.id, reason=str(why)[:300], stale=not owned)
+        return owned
+
     def finish(self, *, video: dict | None = None, no_video: str | None = None, error: str | None = None) -> dict:
         """The video is done (video), the pipeline decided against it (no_video: final), or it crashed
         (error: a later click may try again, up to max_tries)."""
         g = self.gate
         g_now = g.now()
-        outcome = "done" if video is not None else ("no_video" if no_video else "failed")
+        outcome = "done" if video is not None else ("no_video" if no_video is not None else "failed")
+        no_video = (str(no_video).strip() or "no video") if no_video is not None else None
 
         def ev(cur):
             if not cur or (cur.get("ticket") or {}).get("id") != self.id:

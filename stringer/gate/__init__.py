@@ -5,8 +5,9 @@
     g.screen(events)                      # the front page's list (refused events left out)
     d = g.start(event, visitor_id)        # d.ok, d.code, d.message; d.ticket on go
     d.ticket.checkpoint(n_articles=42)    # after the searches
-    d.ticket.charge(0.012, "brief_read")  # or complete = d.ticket.wrap(models.complete)
-    d.ticket.finish(video={...})
+    d.ticket.charge(0.012, "brief_read")  # after each paid step
+    d.ticket.finish(video={...})          # or d.ticket.cancel("the job could not start")
+    g.view(event_id)                      # what a visitor may be shown: ready, making, has_video, ...
 
 core.py explains the checks and the decisions behind them; rules.py, policy.py, cost.py and store.py
 are the parts."""

@@ -143,6 +143,57 @@ def test_gcs_store_uses_generation_match():
     assert s.list("events/") == ["events/x.json"]
 
 
+def test_gcs_store_waits_out_a_busy_answer_but_never_resends_a_write_after_a_network_error(monkeypatch):
+    from stringer.gate import store as store_mod
+    monkeypatch.setattr(store_mod.time, "sleep", lambda s: None)
+
+    class Flaky(FakeGCS):
+        def __init__(self, get_plan=(), post_plan=()):
+            super().__init__()
+            self.get_plan, self.post_plan, self.gets, self.posts = list(get_plan), list(post_plan), 0, 0
+
+        def get(self, url, params=None, timeout=None):
+            self.gets += 1
+            step = self.get_plan.pop(0) if self.get_plan else None
+            if isinstance(step, Exception):
+                raise step
+            return FakeResp(step) if step else super().get(url, params=params, timeout=timeout)
+
+        def post(self, url, params=None, data=None, headers=None, timeout=None):
+            self.posts += 1
+            step = self.post_plan.pop(0) if self.post_plan else None
+            if isinstance(step, Exception):
+                raise step
+            return FakeResp(step) if step else super().post(url, params=params, data=data, headers=headers, timeout=timeout)
+
+    busy = Flaky(get_plan=[503, ConnectionError("reset")], post_plan=[503])
+    s = GCSStore("bucket", "gate", session=busy)
+    assert s.put("slots.json", {"n": 1}, None) == "1" and busy.posts == 2          # 503, then written once
+    assert s.get("slots.json") == ({"n": 1}, "1") and busy.gets == 3               # 503, a network error, then read
+    lost = Flaky(post_plan=[ConnectionError("the answer never came")])
+    with pytest.raises(ConnectionError):                                             # maybe written: don't send it twice
+        GCSStore("bucket", "gate", session=lost).put("slots.json", {"n": 1}, None)
+    assert lost.posts == 1
+    still = Flaky(get_plan=[503, 503, 503])
+    with pytest.raises(RuntimeError):                                                # busy three times: the error is real
+        GCSStore("bucket", "gate", session=still).get("slots.json")
+
+
+def test_voice_credits_left_is_the_limit_minus_the_use_and_none_when_unknown(monkeypatch):
+    import io
+    import json as js
+    from stringer.gate import credits
+    monkeypatch.setattr(credits.keys, "get", lambda name: "k")
+    monkeypatch.setattr(credits.urllib.request, "urlopen",
+                        lambda req, timeout=None: io.BytesIO(js.dumps({"character_count": 20000, "character_limit": 100000}).encode()))
+    assert credits._ask_elevenlabs() == 80000          # (the tests' shared setup stubs voice_credits_left itself)
+
+    def down(req, timeout=None):
+        raise OSError("no network")
+    monkeypatch.setattr(credits.urllib.request, "urlopen", down)
+    assert credits._ask_elevenlabs() is None
+
+
 # ---- check, screen, start --------------------------------------------------------------------------
 
 def test_go_and_a_second_click_waits():
@@ -281,14 +332,10 @@ def test_cost_is_worked_out_before_spending():
     assert t.checkpoint(n_articles=30)["usd"] < 1.0
 
 
-def test_charge_backstop_and_wrap():
+def test_charge_backstop():
     g = gate()
     t = g.start(ev(), "v").ticket
-
-    class R:
-        cost = {"total": 0.25}
-    charged = t.wrap(lambda *a, **kw: R())
-    charged([], name="script")
+    t.charge(0.25, "script")
     assert t.spent == 0.25 and t.parts == {"script": 0.25}
     with pytest.raises(VideoOverBudget):
         t.charge(5.0, "runaway")
@@ -400,15 +447,135 @@ def test_the_admins_switch_is_kept_in_the_store():
     assert sorted(e["kind"] for e in g.log() if e["kind"] in ("paused", "opened")) == ["opened", "paused"]
 
 
-def test_remake_clears_a_hide_from_reports():
+# ---- Nov 27 review fixes -----------------------------------------------------------------------------
+
+def test_low_voice_credits_pause_new_videos_and_an_unknown_count_does_not():
+    assert gate(voice_left=lambda: 100).start(ev(), "v").code == "voice_low"
+    assert gate(voice_left=lambda: None).start(ev(), "v").ok
+    assert gate(voice_left=lambda: 100_000).start(ev(), "v").ok
+    g = gate(voice_left=lambda: 100)
+    assert g.status()["voice_low"] is True and "narration" in g.start(ev(), "v").message
+
+
+def test_a_fallback_content_answer_is_kept_only_for_a_while():
+    calls, down = [], [True]
+
+    class Fake:
+        def __init__(self, text):
+            self.text = text
+
+    def complete(messages, name=None, **params):
+        calls.append(name)
+        if down[0]:
+            raise TimeoutError("the model is down")
+        return Fake('{"reason": "budget vote", "child_role": "none", "verdict": "allow"}')
+    clock = Clock()
+    g = Gate(MemoryStore(), complete=complete, model="haiku-5-5", now=clock, tavily_left=None, voice_left=None)
+    e = ev()
+    first = g.verdict(e)
+    assert first["fallback"] and first["by"].startswith("code:keywords") and len(calls) == 2    # one try, one retry
+    g.verdict(e)
+    assert len(calls) == 2                                   # within ten minutes the fallback answer is reused
+    clock.add(minutes=11)
+    down[0] = False
+    again = g.verdict(e)
+    assert again["by"] == "model" and not again["fallback"] and len(calls) == 3
+    clock.add(days=3)
+    g.verdict(e)
+    assert len(calls) == 3                                   # the model's own answer is kept for good
+
+
+def test_view_is_what_a_visitor_may_see():
+    clock = Clock()
+    g = gate(clock=clock)
+    eid = ev()["id"]
+    assert g.view(eid) == {"state": "ready", "failed": False}
+    t = g.start(ev(), "v").ticket
+    assert g.view(eid) == {"state": "making"}
+    clock.add(minutes=25)                                    # the run went silent: crashed
+    assert g.view(eid) == {"state": "ready", "failed": True}
+    t2 = g.start(ev(), "w").ticket
+    t2.finish(video={"url": f"/media/videos/{eid}/{t2.id}/video.mp4", "poster": f"/media/videos/{eid}/{t2.id}/poster.jpg"})
+    assert g.view(eid)["state"] == "has_video" and g.view(eid)["video"]["url"].endswith("video.mp4")
+    assert g.may_watch(f"videos/{eid}/{t2.id}/video.mp4") and g.may_watch(f"videos/{eid}/{t2.id}/captions.vtt")
+    assert not g.may_watch(f"videos/{eid}/{t.id}/video.mp4")            # another run's files
+    assert not g.may_watch("videos/unknown-event/x/video.mp4") and not g.may_watch("videos/../x/y")
+    g.take_down(eid, by="jan")
+    assert g.view(eid) == {"state": "unavailable"} and not g.may_watch(f"videos/{eid}/{t2.id}/video.mp4")
+    other = ev("e2")
+    g.start(other, "v").ticket.finish(no_video="script: the hook beat still fails")
+    assert g.view(other["id"]) == {"state": "no_video", "reason": "script: the hook beat still fails"}
+
+
+def test_cancel_gives_back_everything_the_click_took():
+    g = gate(cfg=cfg_with(per_visitor_per_hour=1))
+    eid = ev()["id"]
+    t = g.start(ev(), "v").ticket
+    assert g.status()["videos_today"] == 1 and g.status()["being_made"] == 1
+    assert t.cancel("the job could not be started") is True
+    st = g.status()
+    assert st["videos_today"] == 0 and st["being_made"] == 0 and g.view(eid) == {"state": "ready", "failed": False}
+    rec = g.store.get(f"events/{eid}.json")[0]
+    assert rec["tries"] == 0 and rec["ticket"] is None
+    assert g.start(ev(), "v").ok                              # the visitor's one start this hour came back too
+    assert "start_cancelled" in [e["kind"] for e in g.log()]
+    assert t.cancel() is False                               # a second cancel finds nothing of its own
+
+
+def test_remake_clears_a_hide_and_a_report_hides_only_a_video():
     g = gate(cfg=cfg_with(per_visitor_per_hour=10))
     eid = ev()["id"]
-    g.start(ev(), "v").ticket.finish(video={"url": "u"})
-    r = g.report(eid, "viewer", "wrong_facts", "")
-    assert r["code"] == "reported" and r["hidden"]
-    assert g.start(ev(), "v").code == "taken_down"
-    rec = g.remake(eid, by="jan", note="the date was wrong")
-    assert not rec["hidden"] and rec["hidden_by"] is None and rec["reports_since_review"] == 0 and rec["video"] is None
-    assert rec["history"][-1]["outcome"] == "reset for a remake by jan" and rec["history"][-1]["video"] == {
-        "url": "u", "made_at": rec["history"][-1]["video"]["made_at"]}
-    assert g.start(ev(), "v").ok
+    r = g.report(eid, "viewer", "wrong_facts", "no video yet")
+    assert r["ok"] and r["hidden"] is False and g.start(ev(), "v").ok        # an unmade event stays on the list
+    g.ticket(eid).finish(video={"url": "u"})
+    assert g.report(eid, "viewer2", "wrong_facts")["hidden"] is True
+    g.remake(eid, by="jan")
+    assert g.view(eid) == {"state": "ready", "failed": False} and g.start(ev(), "v").ok
+
+
+def test_finish_takes_an_empty_reason_as_no_video_and_nothing_as_failed():
+    g = gate(cfg=cfg_with(per_visitor_per_hour=10))
+    assert g.start(ev("a"), "v").ticket.finish(no_video="")["outcome"] == "no_video"
+    assert g.store.get(f"events/{ev('a')['id']}.json")[0]["no_video_reason"] == "no video"
+    assert g.start(ev("b"), "v").ticket.finish()["outcome"] == "failed"
+
+
+class FlakyStore(MemoryStore):
+    """A store whose writes to chosen keys fail while `down` is set (Cloud Storage having a bad minute)."""
+
+    def __init__(self):
+        super().__init__()
+        self.down = ()
+
+    def put(self, key, value, version):
+        if any(key.startswith(k) for k in self.down):
+            raise ConnectionError(f"could not write {key}")
+        return super().put(key, value, version)
+
+
+def test_a_missed_heartbeat_does_not_end_a_running_video():
+    store, clock = FlakyStore(), Clock()
+    g = gate(store=store, clock=clock)
+    t = g.start(ev(), "v").ticket
+    t._last_beat -= 3600                                     # a beat is due
+    store.down = ("events/",)
+    t.charge(0.01, "gather")                                 # the store is down: noted, not raised
+    assert t.missed_beats == 1 and t.spent == 0.01
+    store.down = ()
+    t._last_beat -= 3600
+    t.charge(0.01, "same_story")
+    assert t.missed_beats == 1 and g.store.get(f"events/{ev()['id']}.json")[0]["ticket"]["spent"] == 0.02
+    g.remake(ev()["id"], by="jan")                           # the claim is gone: that still stops the run
+    t._last_beat -= 3600
+    with pytest.raises(ClaimLost):
+        t.charge(0.01, "story_file")
+
+
+def test_a_store_error_in_the_middle_of_a_start_gives_the_claim_back():
+    store = FlakyStore()
+    g = gate(store=store)
+    store.down = ("slots.json",)
+    with pytest.raises(ConnectionError):
+        g.start(ev(), "v")
+    store.down = ()
+    assert g.view(ev()["id"]) == {"state": "ready", "failed": False} and g.start(ev(), "v").ok

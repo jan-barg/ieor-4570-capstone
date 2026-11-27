@@ -54,6 +54,8 @@ AGENTS = [
          does="Records the narrator, plans each shot and draws the video frame by frame."),
 ]
 KEYS = [a["key"] for a in AGENTS]
+# Model steps (config/models.toml) whose calls belong to another pipeline step than the one running.
+CALL_STEPS = {"fact_check": "fact_check"}
 
 # What a model call was for, in plain words, from the name the module gave it (models.complete's name/step).
 PURPOSES = [
@@ -116,10 +118,12 @@ class Progress:
         return time.time()
 
     def call(self, info: dict) -> None:
-        """One model call came back (models.on_call). It belongs to the step that is running."""
+        """One model call came back (models.on_call). It belongs to the step that is running, except the
+        fact check's: its model starts during the Story File step (pipeline.py), and its calls are its own."""
         with self._lock:
+            step = CALL_STEPS.get(str(info.get("step") or "")) or self.doc["current"]
             self.doc["calls"].append({
-                "t": self.now(), "step": self.doc["current"], "name": str(info.get("name") or info.get("step") or "")[:80],
+                "t": self.now(), "step": step, "name": str(info.get("name") or info.get("step") or "")[:80],
                 "model": info.get("model"), "usd": round(float(info.get("usd") or 0.0), 6),
                 "tokens_in": int(info.get("tokens_in") or 0), "tokens_out": int(info.get("tokens_out") or 0),
                 "seconds": round(float(info.get("seconds") or 0.0), 2), "error": bool(info.get("error"))})

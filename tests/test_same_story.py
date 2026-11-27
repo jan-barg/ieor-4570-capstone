@@ -96,6 +96,31 @@ def test_article_with_no_answer_after_retry_is_flagged():
     assert out["flags"] == ["1 articles got no verdict"]
 
 
+def test_a_failed_first_call_is_asked_again_and_a_second_failure_stops_the_run():
+    import pytest
+    arts = [art(1, "Dam bursts in Varo"), art(2, "Football cup final")]
+
+    class Flaky(Scripted):
+        def __init__(self, rules, fails):
+            super().__init__(rules)
+            self.fails, self.timeouts = fails, []
+
+        def __call__(self, messages, name=None, max_tokens=None, **kw):
+            self.timeouts.append(kw.get("timeout"))
+            if len(self.calls) < self.fails:
+                self.calls.append(name)
+                raise TimeoutError("the model did not answer")
+            return super().__call__(messages, name=name, max_tokens=max_tokens, **kw)
+
+    once = Flaky({"dam": "same"}, fails=1)
+    res = same_story.filter_story(EVENT, arts, once)
+    assert once.calls == ["same_story", "same_story retry"] and set(once.timeouts) == {same_story.CALL_TIMEOUT_S}
+    assert res["verdicts"]["a_1"]["verdict"] == "same" and res["verdicts"]["a_2"]["verdict"] == "different"
+    assert any("call failed" in p for p in res["problems"])
+    with pytest.raises(TimeoutError):                 # no verdicts at all: don't pass articles through unjudged
+        same_story.filter_story(EVENT, arts, Flaky({"dam": "same"}, fails=2))
+
+
 def test_side_drop_check_flags_a_lopsided_filter():
     lens = {"sides": [{"side_id": "left_x", "outlet_ids": ["l1"]}, {"side_id": "right_x", "outlet_ids": ["r1"]}]}
     arts = [art(i, f"dam story {i}", outlet="l1") for i in range(5)] + \

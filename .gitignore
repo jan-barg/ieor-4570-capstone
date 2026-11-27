@@ -16,6 +16,14 @@ __pycache__/
 stringer_private/
 *.jsonl
 *.csv.gz
+# The Dockerfile copies a private/ folder into the image (outlet table, map shapes, music, photos). Cloud
+# Build fills it from the private bucket; a local `docker build` needs it here, and it must never be added.
+/private/
+
+# Other sessions' scratch output
+/deslop/
+/preview/
+/before-after.png
 
 # Module 8 render project: installed packages, bundles and local renders
 render/node_modules/

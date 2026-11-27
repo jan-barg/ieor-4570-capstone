@@ -19,10 +19,13 @@ VERSION = "gather-1.2 (2026-11-24, local press for no-split stories)"
 
 def gather_event(ev: Event, lens: Lens, t: OutletTable, tv: Tavily, g: Guardian, *,
                  writer: str = "model", window_days: int | None = 2, queries: QuerySet | None = None,
-                 cache: ArticleCache | None = None, wait_s: int = 30, write: bool = True) -> dict:
+                 cache: ArticleCache | None = None, wait_s: int = 30, write: bool = True,
+                 trace_id: str | None = None) -> dict:
+    """trace_id: the Langfuse trace of the run this Gather is part of (the live pipeline opens one per
+    video). Without it Gather opens its own, as the fixture freeze does."""
     cache = cache or ArticleCache()
     tr = tracer()
-    tid = tr.new_trace(f"gather:{ev.short}", {"event": ev.id, "title": ev.title, "lens": lens.kind})
+    tid = trace_id or tr.new_trace(f"gather:{ev.short}", {"event": ev.id, "title": ev.title, "lens": lens.kind})
     t0 = time.time()
     spent0 = tv.ledger.spent
     if queries is None:

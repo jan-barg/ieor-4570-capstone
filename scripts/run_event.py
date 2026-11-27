@@ -1,12 +1,12 @@
 """Make one video from a live event: the Gate, then modules 1-8 (stringer/pipeline.py), with each step timed.
 
     python -m scripts.run_event --list                 # eligible events in the live feed now (free)
-    python -m scripts.run_event 1e965a70               # through the Gate, then the whole pipeline (paid)
-    python -m scripts.run_event 1e965a70 --snapshot    # take the event from the newest saved poll instead
-    python -m scripts.run_event 1e965a70 --no-gate     # skip the Gate (testing only: no limits, no records)
+    python -m scripts.run_event 1a2b3c4d               # through the Gate, then the whole pipeline (paid)
+    python -m scripts.run_event 1a2b3c4d --snapshot    # take the event from the newest saved poll instead
+    python -m scripts.run_event 1a2b3c4d --no-gate     # skip the Gate (testing only: no limits, no records)
 
-Paid: about $0.66 in model calls, about 7 Tavily credits and about 250 ElevenLabs credits a video
-(Jan approved 3-5 timing runs on Nov 27). The Gate keeps its records in GATE_STORE (default
+Paid: a video cost $0.12 to $0.22 in all on the four timing runs of Nov 27 (the Gate's safe-side estimate
+at the click is $0.66), with about 7 Tavily credits and about 250 ElevenLabs credits. The Gate keeps its records in GATE_STORE (default
 stringer_private/gate/); the story folder is stringer_private/live/stories/<event id>/, the run's
 timings are in stringer_private/runs/pipeline-<time>.json and the story's pipeline.json.
 
@@ -20,7 +20,7 @@ import json
 import sys
 
 from stringer import feed, paths, pipeline
-from stringer.gate import Gate, TooCostly
+from stringer.gate import Gate, TooCostly, VideoOverBudget
 from stringer.gate import rules
 
 
@@ -65,18 +65,20 @@ def main(argv=None) -> int:
         print(f"Gate: go (ticket {ticket.id}, estimate ${ticket.estimate_usd:.2f})")
     try:
         rec = pipeline.run(raw, ticket, render=not a.no_render)
-    except TooCostly as e:
+    except (TooCostly, VideoOverBudget) as e:            # final: the same story would cost the same again
         if ticket:
             ticket.finish(no_video=f"too costly: {e}")
         print(f"no video: too costly: {e}")
         return 1
-    except Exception as e:
+    except Exception as e:                                # a crash or a model outage: a later run may try again
         if ticket:
             ticket.finish(error=repr(e))
         raise
     if ticket:
         if rec["outcome"] == "done":
             ticket.finish(video=rec["video"])
+        elif rec["outcome"] == "planned":                 # --no-render: nothing to show, so the click is given back
+            ticket.cancel("a plan-only run (--no-render)")
         else:
             ticket.finish(no_video=rec["why"])
     print(f"{rec['outcome']}{': ' + rec['why'] if rec.get('why') else ''}  {rec['seconds']:.0f} s in all, "
@@ -84,7 +86,7 @@ def main(argv=None) -> int:
     for name, s in rec["steps"].items():
         print(f"  {name:<12} {s['seconds']:>6.1f} s  ${s['usd']:.4f}")
     if rec.get("video"):
-        print(f"video: {rec['video']['mp4']}")
+        print(f"video: {rec['video'].get('mp4') or rec['video'].get('plan')}")
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     paths.RUNS.mkdir(parents=True, exist_ok=True)
     (paths.RUNS / f"pipeline-{stamp}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")

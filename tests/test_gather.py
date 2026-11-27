@@ -193,6 +193,41 @@ def test_query_writer_writes_local_press_query_but_no_sides(t, monkeypatch):
     assert lens.sides == []                      # the local press is never a side
 
 
+def test_query_writer_never_fails_the_run(t, monkeypatch):
+    from types import SimpleNamespace
+    lens = lens_for(t, "world", "ukraine", "russia")
+    calls = []
+
+    def answers(*texts):
+        left = list(texts)
+
+        def fake(step, msgs, **kw):
+            calls.append(kw)
+            x = left.pop(0)
+            if isinstance(x, Exception):
+                raise x
+            return SimpleNamespace(text=x, model="fake", cost={"total": 0.001})
+        return fake
+
+    good = json.dumps({"reworded": "a b c d e", "background": "f g h", "sides": {"ukraine": "u q", "russia": "r q"}})
+    # a failed call, then a good answer in plain JSON mode
+    monkeypatch.setattr(queries.models, "complete", answers(TimeoutError("slow"), good))
+    qs = queries.model_queries(event(), lens, t)
+    assert qs.writer == "model" and qs.sides == {"ukraine": "u q", "russia": "r q"}
+    assert calls[0]["response_format"]["type"] == "json_schema" and calls[0]["timeout"] == queries.CALL_TIMEOUT_S
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert set(calls[0]["response_format"]["json_schema"]["schema"]["properties"]["sides"]["required"]) == {"ukraine", "russia"}
+    # a list instead of an object, then broken JSON: the template writer's queries are used, and it says so
+    monkeypatch.setattr(queries.models, "complete", answers("[1, 2]", "{not json"))
+    qs = queries.model_queries(event(), lens, t)
+    assert qs.writer == "template (fallback)" and len(qs.errors) == 2 and qs.reworded and qs.background
+    assert set(qs.sides) == {"ukraine", "russia"} and qs.cost_usd == 0.002
+    # the saved form still loads (remerge_frozen builds a QuerySet from gather.json's queries)
+    assert queries.QuerySet(**qs.as_dict()).writer == "template (fallback)"
+    # a story with no sides asks for no "sides" object at all
+    assert "sides" not in queries.schema([])["json_schema"]["schema"]["properties"]
+
+
 def test_fixture_lenses_read_local_press_column(tmp_path, monkeypatch, t):
     from stringer import paths
     f = tmp_path / "lenses.csv"
@@ -289,6 +324,56 @@ def test_thin_results_retry_then_stop(tmp_path):
     assert tv.ledger.spent == spent and all(a["cached"] for a in log.attempts)
 
 
+def test_only_core_searches_get_the_delayed_third_try(tmp_path):
+    side = plan.Search("q3a_side_russia_general", {"query": "x", "topic": "general", "include_domains": ["tass.com"]})
+    tv = FakeTavily([1, 2, 9], raw_dir=str(tmp_path))
+    rec, log = plan.run_search(tv, event(), side, wait_s=0)
+    assert [a["results"] for a in log.attempts] == [1, 2] and log.results == 2      # no third call for a side search
+    # a third try saved by an older run (the frozen stories have some) is still read back
+    tv2 = FakeTavily([1, 2, 9], raw_dir=str(tmp_path / "b"))
+    core = plan.Search("q3a_side_russia_general", dict(side.params))
+    plan.WAIT_RETRY, kept = plan.WAIT_RETRY + (core.qid,), plan.WAIT_RETRY
+    try:
+        plan.run_search(tv2, event(), core, wait_s=0)                                # saves all three
+    finally:
+        plan.WAIT_RETRY = kept
+    rec, log = plan.run_search(tv2, event(), core, wait_s=0)
+    assert [a["results"] for a in log.attempts] == [1, 2, 9] and all(a["cached"] for a in log.attempts)
+
+
+def test_x_posts_are_found_by_host_not_by_letters():
+    assert plan.is_x_post("https://x.com/AP/status/123") and plan.is_x_post("https://www.twitter.com/AP/status/1")
+    assert plan.is_x_post("https://mobile.twitter.com/AP/status/1")
+    for u in ("https://www.vox.com/world/2026/11/17/story", "https://www.newsmax.com/world/story/1",
+              "https://interfax.com/newsroom/top-stories/1/", "https://www.fox.com/news/a"):
+        assert not plan.is_x_post(u)
+    ev = event(sources=["https://www.vox.com/world/2026/11/17/story", "https://x.com/AP/status/5",
+                        "https://www.theguardian.com/world/2026/nov/17/a"])
+    extract, guardian, xposts = plan.own_links(ev)
+    assert extract == ["https://www.vox.com/world/2026/11/17/story"] and xposts == ["https://x.com/AP/status/5"]
+    assert guardian == ["https://www.theguardian.com/world/2026/nov/17/a"]
+
+
+def test_guardian_calls_start_apart_without_holding_the_lock(monkeypatch):
+    starts = []
+    monkeypatch.setattr(clients.Guardian, "_last", [0.0])
+    monkeypatch.setattr(clients.time, "sleep", lambda s: starts.append(round(s, 1)))
+    monkeypatch.setattr(clients.keys, "get", lambda name: "k")
+
+    class Boom(Exception):
+        pass
+
+    def urlopen(req, timeout=None):
+        assert timeout == clients.Guardian.TIMEOUT_S and not clients.Guardian._lock.locked()
+        raise clients.urllib.error.URLError("down")
+    monkeypatch.setattr(clients.urllib.request, "urlopen", urlopen)
+    g = clients.Guardian(raw_dir="/nonexistent-guardian-raw")
+    a = g.get("search", {"q": "x"}, "t/a")
+    b = g.get("search", {"q": "y"}, "t/b")
+    assert a["status"] == 0 and b["status"] == 0 and g.calls == 2
+    assert starts and starts[-1] >= 1.0            # the second call waited for its own start time
+
+
 def test_budget_stops_before_overspending(tmp_path):
     tv = FakeTavily([], raw_dir=str(tmp_path), ledger=clients.CreditLedger(limit=2))
     tv.search("e/a", query="x")
@@ -310,6 +395,9 @@ def test_gather_event_end_to_end(tmp_path, monkeypatch, t):
     ev = event()
     lens = lens_for(t, "world", "ukraine", "russia")
     meta = run.gather_event(ev, lens, t, tv, g, writer="template", cache=cache, wait_s=0)
+    assert meta["langfuse_trace_id"]                                     # its own trace when none is given
+    joined = run.gather_event(ev, lens, t, tv, g, writer="template", cache=cache, wait_s=0, trace_id="video-trace")
+    assert joined["langfuse_trace_id"] == "video-trace"                  # the live run's trace is used as given
     rows = [json.loads(x) for x in (tmp_path / "stories" / ev.id / "articles.jsonl").read_text().splitlines()]
     assert meta["counts"]["articles"] == len(rows) > 10
     keys = {"id", "url", "outlet", "published_at", "labels", "text_status", "text", "role", "own_source"}

@@ -281,6 +281,15 @@ def hard_stories(step: Step, runs: list[dict]) -> str:
         v = [x for x in v if x is not None]
         return sum(v) / len(v) if v else 1.0
     sids.sort(key=lambda s: (mean(s), s))
+    # A step's per-story number is a share (0 to 1: same-story accuracy, coverage) or a count (blindspots,
+    # framing points, flagged claims). A count used to be printed as a percent too: 76 points read "7600".
+    vals = [v for r in runs for v in r["summary"]["stories"].values() if isinstance(v, (int, float))]
+    shares = all(0 <= v <= 1 for v in vals)
+    top = max(vals, default=0) or 1
+
+    def shown(v) -> tuple[float, str]:
+        """(how full the cell is drawn, 0-100; the text in it)"""
+        return (v * 100, f"{v * 100:.0f}") if shares else (v / top * 100, f"{v:g}")
     out = ['<div class="scroll"><table class="heat"><thead><tr><th class="story">Story</th>']
     out += [f'<th><span class="{"code-name" if is_code(r) else ""}">{esc(r["model"].removeprefix(CODE_PREFIX))}</span>'
             f'<span class="sub">{esc(r["version"])}</span></th>' for r in runs]
@@ -294,11 +303,14 @@ def hard_stories(step: Step, runs: list[dict]) -> str:
             if v is None:
                 out.append('<td class="none" data-tip="not in this run">·</td>')
                 continue
-            tip = f"{run_name(r)}\n{sid} {title}\n{v:.0%} of its labeled items right"
-            out.append(f'<td class="cell{" strong" if v > 0.55 else ""}" style="--p:{v * 100:.0f}%" '
-                       f'data-tip="{esc(tip)}">{v * 100:.0f}</td>')
-        m = mean(sid)
-        out.append(f'<td class="cell avg{" strong" if m > 0.55 else ""}" style="--p:{m * 100:.0f}%">{m * 100:.0f}</td></tr>')
+            fill, text = shown(v)
+            tip = (f"{run_name(r)}\n{sid} {title}\n" +
+                   (f"{v:.0%} of its labeled items right" if shares else f"{v:g} in this story (a count, not a share)"))
+            out.append(f'<td class="cell{" strong" if fill > 55 else ""}" style="--p:{fill:.0f}%" '
+                       f'data-tip="{esc(tip)}">{text}</td>')
+        fill, text = shown(mean(sid))
+        out.append(f'<td class="cell avg{" strong" if fill > 55 else ""}" style="--p:{fill:.0f}%">'
+                   f'{text if shares else f"{mean(sid):.1f}"}</td></tr>')
     out.append("</tbody></table></div>")
     return "".join(out)
 

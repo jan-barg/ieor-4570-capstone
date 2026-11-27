@@ -16,19 +16,23 @@
      own sources        Extract (Guardian links via the API)  the event's links minus X posts
      background         general                      every news/wire row, end_date = day before   10
 
-Every search: page text on, a domain list, start_date = the event's UTC day, basic depth.
-Fewer than 5 results -> retry right away, then once more after ~30 s. General mode asks for
-published dates. Fixtures add end_date = start + 2 days."""
+Every search but the background one: page text on, a domain list, start_date = the event's UTC day,
+basic depth. Fewer than 5 results -> retry right away. The two core searches then try once more after
+~30 s (Nov 27: on 12 saved cases that third try found more only for core searches, 1-3 results -> 20;
+side searches never gained, and a side that stays short gets module 4's follow-up round anyway).
+General mode asks for published dates. Fixtures and live runs add end_date = start + 2 days."""
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from ..events import Event
-from ..outlets import OutletTable
+from ..outlets import X_HOSTS, OutletTable
 from .clients import BudgetExceeded, Guardian, Tavily
 from .merge import Hit, is_guardian_noise, url_key
 from .queries import QuerySet, terms
@@ -42,7 +46,14 @@ GUARDIAN_KEEP = 8
 LOCAL_MAX = 20      # the two side searches it replaces on a no-split story returned 10 each
 THIN = 5
 RETRY_WAIT_S = 30
-X_HOSTS = ("x.com/", "twitter.com/")
+WAIT_RETRY = ("q1_core", "q2_reworded")   # the searches that get the third, delayed try
+
+
+def is_x_post(url: str) -> bool:
+    """A link to X (Twitter), by its exact host. A substring test would also catch vox.com, newsmax.com
+    and interfax.com, whose links would then never be read."""
+    host = (urlsplit(str(url).strip()).hostname or "").lower()
+    return (host[4:] if host.startswith("www.") else host) in X_HOSTS
 
 
 @dataclass
@@ -110,15 +121,18 @@ def build_searches(ev: Event, lens: Lens, qs: QuerySet, t: OutletTable,
 
 
 def run_search(tv: Tavily, ev: Event, s: Search, trace_id=None, wait_s=RETRY_WAIT_S) -> tuple[dict, SearchLog]:
-    """One search with the thin-result retries. Returns the fullest response."""
+    """One search with the thin-result retries. Returns the fullest response. A saved third try is always
+    read back (frozen stories keep theirs); a new one is made only for the core searches (WAIT_RETRY)."""
     log = SearchLog(s.qid, s.params.get("topic"), s.params.get("query"), len(s.params.get("include_domains", [])))
     best, best_n = None, -1
     for attempt in range(3):
         name = f"{ev.short}/{s.qid}" + (f"__retry{attempt}" if attempt else "")
         if attempt == 2:
             # the second retry waits ~30 s, unless its response is already saved
-            import os
-            if not os.path.exists(os.path.join(tv.raw_dir, name + ".json")) and not tv.offline:
+            saved = os.path.exists(os.path.join(tv.raw_dir, name + ".json"))
+            if not saved and s.qid not in WAIT_RETRY:
+                break
+            if not saved and not tv.offline:
                 time.sleep(wait_s)
         rec = tv.search(name, trace_id=trace_id, **s.params)
         n = len((rec.get("response") or {}).get("results", [])) if rec.get("status") == 200 else 0
@@ -214,7 +228,7 @@ def x_post_time(url: str) -> str | None:
 def source_hits(ev: Event) -> list[Hit]:
     """Every link the event cites becomes a row, even without text (X posts, blocked sites)."""
     return [Hit(url=u, via="mts_source", query_id="mts_sources", rank=0,
-                published=x_post_time(u) if any(h in u.lower() for h in X_HOSTS) else None)
+                published=x_post_time(u) if is_x_post(u) else None)
             for u in ev.source_urls]
 
 
@@ -223,7 +237,7 @@ def own_links(ev: Event) -> tuple[list[str], list[str], list[str]]:
     extract, guardian, xposts = [], [], []
     for u in ev.source_urls:
         low = u.lower()
-        if any(h in low for h in X_HOSTS):
+        if is_x_post(u):
             xposts.append(u)
         elif "theguardian.com/" in low:
             guardian.append(u)
@@ -251,7 +265,7 @@ def extract_own(tv: Tavily, ev: Event, urls: list[str], cached_full: set[str], t
 
 def run_plan(ev: Event, lens: Lens, qs: QuerySet, t: OutletTable, tv: Tavily, g: Guardian,
              end_date: str | None = None, cached_full: set[str] = frozenset(), trace_id=None,
-             wait_s=RETRY_WAIT_S, workers=6) -> tuple[list[Hit], dict]:
+             wait_s=RETRY_WAIT_S, workers=10) -> tuple[list[Hit], dict]:
     searches = build_searches(ev, lens, qs, t, end_date)
     hits: list[Hit] = []
     log = {"searches": [], "guardian": [], "own": {}}
@@ -260,6 +274,7 @@ def run_plan(ev: Event, lens: Lens, qs: QuerySet, t: OutletTable, tv: Tavily, g:
         g_search = pool.submit(guardian_searches, g, ev, qs, end_date, trace_id)
         extract_urls, g_own, xposts = own_links(ev)
         f_extract = pool.submit(extract_own, tv, ev, extract_urls, cached_full, trace_id)
+        f_g_own = pool.submit(guardian_items, g, ev, g_own, "g_own", trace_id)   # known up front: no need to wait
         for s, f in zip(searches, futs):
             rec, slog = f.result()      # re-raises BudgetExceeded
             log["searches"].append(slog.__dict__)
@@ -270,12 +285,12 @@ def run_plan(ev: Event, lens: Lens, qs: QuerySet, t: OutletTable, tv: Tavily, g:
         eh, elog = f_extract.result()
         hits += eh
         log["own"] = dict(elog, guardian_links=len(g_own), x_posts=len(xposts))
+        gi, gil = f_g_own.result()
     hits, log["guardian_cut"] = cut_guardian(hits)
     # Guardian links: the event's own, plus any Tavily found that the API searches didn't return
     have = {url_key(h.url) for h in hits if h.via == "guardian_api"}
     tav_guardian = list(dict.fromkeys(h.url for h in hits if h.via != "guardian_api"
                                       and "theguardian.com/" in h.url and url_key(h.url) not in have))
-    gi, gil = guardian_items(g, ev, g_own, "g_own", trace_id)
     gt, gtl = guardian_items(g, ev, [u for u in tav_guardian if url_key(u) not in {url_key(x) for x in g_own}],
                              "g_from_tavily", trace_id)
     hits += gi + gt

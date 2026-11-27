@@ -4,8 +4,8 @@
     python -m scripts.coverage_report --write-labels  # also rewrite the labels in articles.jsonl
 
 Labels are recomputed from the current outlets.csv, so the report reflects edits made after the
-freeze (and --write-labels stores them). Module 2 (same-story filter) doesn't exist yet, so
-"same-story" is approximated two ways: every new-coverage article, and the subset that passes a
+freeze (and --write-labels stores them). This report predates module 2 (the same-story filter, stringer/same_story.py)
+and still approximates "same-story" two ways: every new-coverage article, and the subset that passes a
 keyword check against the event title (which misses most non-English articles).
 
 Targets (map, module 3): lean on >= 90% of articles on US-lens stories, reliability on >= 95%,
