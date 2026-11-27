@@ -175,3 +175,32 @@ def test_report_is_rebuilt_after_each_run(tmp_path):
     page = report.report_path(Shout(), tmp_path).read_text(encoding="utf-8")
     assert "<title>" in page and "upper (code)" in page
     assert "Partial runs" in page and "haiku-5-5" in page          # the one-word run is not compared
+
+
+def test_report_shows_counts_as_numbers_and_marks_the_cheapest_run_best(tmp_path):
+    """Made-up runs: per-story counts must not turn into percents ("7600%"), and for cost and time
+    the lowest value is the best one, not the highest."""
+    from stringer.evals import report
+
+    class Counts(runner.Step):
+        name = "counts"
+        headline = ("coverage", "blindspots_per_story", "step_cost", "step_seconds")
+
+    def row(model, coverage, cost, seconds, stories):
+        return dict(run_id=model, model=model, version="v1", split="tune", stories=2, status="done",
+                    started_at=model, finished_at=model, cost_per_story_usd=cost, cost_usd=2 * cost, wall_s=9,
+                    calls=2, cache_hits=0, file=f"{model}.json",
+                    summary=dict(coverage=coverage, blindspots_per_story=56.0, step_cost=cost, step_seconds=seconds,
+                                 stories=stories))
+
+    rows = [row("cheap", 0.9, 0.01, 40.0, {"s1": 76, "s2": 3}),
+            row("pricey", 0.8, 0.20, 140.0, {"s1": 70, "s2": 5})]
+    page = report.build(Counts(), out_dir=tmp_path, rows=rows)
+    assert "7600" not in page and "7000%" not in page                  # counts stay counts
+    assert ">76</td>" in page and "Story by story" in page
+    assert '<td class="n">56</td>' in page and "56.000" not in page   # an average count: no bar, no bold
+    assert '<td class="n top">$0.010</td>' in page                     # the cheapest cost is the best
+    assert '<td class="n">$0.200</td>' in page                         # the dearest is not
+    assert '<td class="n top">40 s</td>' in page and '<td class="n">2.3 min</td>' in page   # fastest is best
+    assert '<td class="bar top">' in page and '<span class="v">0.900</span>' in page        # higher share is best
+    assert report.better("step_cost", "cost") == "lower" and report.better("coverage", "share") == "higher"

@@ -12,7 +12,9 @@ all). Each section shows:
   hard stories         every run's score on every story, hardest stories first
   mistakes             per run, each item it got wrong, with the model's own reason
 The last three appear when the step provides them: summary["confusion"] as {"gold->pred": n},
-summary["stories"] as {story: score}, and Step.mistakes(). A re-scored run replaces the run it was
+summary["stories"] as {story: share right (0 to 1) or a count}, and Step.mistakes(). Shares show as
+percents and counts as plain numbers. "Best" follows each score's direction (see LOWER_IS_BETTER
+below): lower for cost and time. A re-scored run replaces the run it was
 re-scored from. Charts are inline SVG and HTML tables; the page loads nothing from the network
 except its fonts."""
 from __future__ import annotations
@@ -76,6 +78,89 @@ def metric_info(step: Step, key: str) -> tuple[str, str]:
     return name, note
 
 
+# ---- what kind of number a score is, and which way is better ------------------------------------
+# The steps' metric_notes say what each score means but not which way is better, so it is written
+# down here. In order:
+#   1. cost, time and tokens (found by the key's name): lower is better
+#   2. a key in LOWER_IS_BETTER: lower is better
+#   3. a key in NO_DIRECTION: neither way, so no run is marked best
+#   4. any other share (every value from 0 to 1, like accuracy or coverage): higher is better
+#   5. any other number (a count or an average): neither way
+LOWER_IS_BETTER = {
+    "false_split",      # lens: stories with sides it wrongly called no split ("Lower is better")
+    "clean_dropped",    # fact check: share of the real claims dropped
+    "cards_unused",     # brief merge: share of step 1's cards that went into no claim
+}
+NO_DIRECTION = {        # shares to read, with no answer key or target behind them
+    "one_side_share", "both_sides_share", "neither_only_share",        # brief sides
+    "reported_share",                                                   # brief blind
+    "flagged_share", "own_voice_share",                                 # claim wording
+    "judge_good_share", "jan_good_share",                               # framing judge
+    "clean_confirmed",                                                  # fact check
+}
+
+
+def _number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def metric_kind(key: str, values) -> str:
+    """How a score is shown: "cost" (dollars), "time" (seconds), "tokens", "share" (0 to 1, with a
+    bar) or "count" (a plain number: a count or an average)."""
+    if "cost" in key or "usd" in key:
+        return "cost"
+    if "seconds" in key or key.endswith("_s"):
+        return "time"
+    if "tokens" in key:
+        return "tokens"
+    vals = [v for v in values if _number(v)]
+    if ("_per_" not in key and vals and any(isinstance(v, float) for v in vals)
+            and all(0 <= v <= 1 for v in vals)):
+        return "share"
+    return "count"
+
+
+def better(key: str, kind: str) -> str | None:
+    """"higher", "lower", or None when neither way is better."""
+    if kind in ("cost", "time", "tokens") or key in LOWER_IS_BETTER:
+        return "lower"
+    if key in NO_DIRECTION:
+        return None
+    return "higher" if kind == "share" else None
+
+
+def count(v) -> str:
+    """A count or an average as a plain number: 7600, 2.88, 33.1."""
+    if isinstance(v, int):
+        return f"{v:,}"
+    return f"{v:,.2f}".rstrip("0").rstrip(".")
+
+
+def show(kind: str, v) -> str:
+    if not _number(v):
+        return num(v)
+    if kind == "cost":
+        return usd(v)
+    if kind == "time":
+        return secs(v)
+    if kind == "tokens":
+        return f"{v:,.0f}"
+    return num(v) if kind == "share" else count(v)
+
+
+def column(key: str, runs: list[dict]) -> tuple[str, str | None]:
+    """(kind, which way is better) for one headline score across these runs."""
+    kind = metric_kind(key, [r["summary"].get(key) for r in runs])
+    return kind, better(key, kind)
+
+
+def best_of(values, direction: str | None):
+    vals = [v for v in values if _number(v)]
+    if not vals or direction is None:
+        return None
+    return min(vals) if direction == "lower" else max(vals)
+
+
 def runs_to_show(rows: list[dict]) -> list[dict]:
     """The latest version of every run: a re-score replaces the run it came from."""
     by_id = {r["run_id"]: r for r in rows}
@@ -123,6 +208,7 @@ def scatter(step: Step, runs: list[dict]) -> str:
     pts = [(r, float(y)) for r, y in pts if isinstance(y, (int, float))]
     if not pts:
         return '<p class="empty">No scored runs here yet.</p>'
+    kind, direction = column(main, runs)
     W, H, L, R, T, B = 720, 360, 60, 28, 18, 50
     pw, ph = W - L - R, H - T - B
     xs = [float(r.get("cost_per_story_usd") or 0) for r, _ in pts]
@@ -147,8 +233,9 @@ def scatter(step: Step, runs: list[dict]) -> str:
     out.append(f'<line class="axis" x1="{L}" x2="{W - R}" y1="{T + ph}" y2="{T + ph}"/>')
     out.append(f'<text class="axis-title" x="{L + pw / 2}" y="{H - 8}" text-anchor="middle">'
                f'Cost per story (list price)  →  cheaper is to the left</text>')
+    way = {"higher": "  →  better is higher", "lower": "  →  better is lower"}.get(direction, "")
     out.append(f'<text class="axis-title" transform="translate(14 {T + ph / 2}) rotate(-90)" text-anchor="middle">'
-               f'{esc(metric_info(step, main)[0])}  →  better is higher</text>')
+               f'{esc(metric_info(step, main)[0])}{way}</text>')
     # labels: right of the dot, or left of it near the right edge; nudged apart vertically
     labels = []
     for (r, y), x in zip(pts, xs):
@@ -163,7 +250,7 @@ def scatter(step: Step, runs: list[dict]) -> str:
     for l in labels:
         r = l["r"]
         tip = (f"{run_name(r)}{' — ' + r['label'] if r.get('label') else ''}\n"
-               f"{metric_info(step, main)[0]}: {num(r['summary'].get(main))}\n"
+               f"{metric_info(step, main)[0]}: {show(kind, r['summary'].get(main))}\n"
                f"Cost per story: {usd(r.get('cost_per_story_usd'))} · whole run {usd(r.get('cost_usd'))}\n"
                f"Time: {secs(r.get('wall_s'))} · {r.get('stories')} stories · {r.get('status')}")
         cls = "dot code" if is_code(r) else "dot"
@@ -180,12 +267,11 @@ def scatter(step: Step, runs: list[dict]) -> str:
 
 def scores_table(step: Step, runs: list[dict]) -> str:
     main = step.headline[0]
-    order = sorted(runs, key=lambda r: (r["summary"].get(main) is None, -(r["summary"].get(main) or 0)))
-    fracs = {k for k in step.headline
-             if all(isinstance(r["summary"].get(k), float) or r["summary"].get(k) is None for r in runs)
-             and any(isinstance(r["summary"].get(k), float) for r in runs)}
-    best = {k: max((r["summary"][k] for r in runs if isinstance(r["summary"].get(k), float)), default=None)
-            for k in fracs}
+    cols = {k: column(k, runs) for k in step.headline}
+    main_dir = cols[main][1]
+    sign = 1 if main_dir == "lower" else -1                  # best first; most first when neither way
+    order = sorted(runs, key=lambda r: (not _number(r["summary"].get(main)), sign * (r["summary"].get(main) or 0)))
+    best = {k: best_of((r["summary"].get(k) for r in runs), d) for k, (_, d) in cols.items()}
     head = ["Run"] + [metric_info(step, k)[0] for k in step.headline] + ["Cost per story", "Whole run", "Time", "Calls"]
     tips = [""] + [metric_info(step, k)[1] for k in step.headline] + [
         "What the model calls cost per story, at list price (cached calls counted too, so runs compare fairly)",
@@ -198,19 +284,21 @@ def scores_table(step: Step, runs: list[dict]) -> str:
     for i, r in enumerate(order):
         s = r["summary"]
         chips = "".join(f'<span class="chip {c}">{esc(t)}</span>' for c, t in (
-            ("best", "best") if i == 0 and s.get(main) is not None and not is_code(r) else ("", ""),
+            ("best", "best") if i == 0 and main_dir and _number(s.get(main)) and not is_code(r) else ("", ""),
             ("warn", r["status"]) if r["status"] != "done" else ("", "")) if t)
         label = f'<div class="sub">{esc(r["label"])}</div>' if r.get("label") else ""
         out.append(f'<tr><th class="run" scope="row"><span class="{"code-name" if is_code(r) else ""}">'
                    f'{esc(run_name(r))}</span>{chips}{label}</th>')
         for k in step.headline:
             v = s.get(k)
-            if k in fracs and isinstance(v, float):
-                top = " top" if best.get(k) is not None and abs(v - best[k]) < 1e-9 and len(runs) > 1 else ""
+            kind = cols[k][0]
+            top = (" top" if _number(v) and best[k] is not None and abs(v - best[k]) < 1e-9 and len(runs) > 1
+                   else "")
+            if kind == "share" and _number(v):
                 out.append(f'<td class="bar{top}"><span class="fill" style="--wn:{max(0.0, min(1.0, v)):.3f}"></span>'
                            f'<span class="v">{num(v)}</span></td>')
             else:
-                out.append(f'<td class="n">{esc(num(v))}</td>')
+                out.append(f'<td class="n{top}">{esc(show(kind, v))}</td>')
         out.append(f'<td class="n">{esc(usd(r.get("cost_per_story_usd")))}</td><td class="n">{esc(usd(r.get("cost_usd")))}</td>'
                    f'<td class="n">{esc(secs(r.get("wall_s")))}</td>'
                    f'<td class="n">{r.get("calls", 0)} <span class="muted">({r.get("cache_hits", 0)})</span></td></tr>')
@@ -267,6 +355,13 @@ def confusion(step: Step, runs: list[dict]) -> str:
             '<span><i class="key missk"></i>wrong</span></div><div class="confs">' + "".join(blocks) + "</div>")
 
 
+def stories_are_shares(runs: list[dict]) -> bool:
+    """True when the per-story numbers are shares right (0 to 1); False when they are counts. Five
+    steps (brief sides, brief blind, brief framing, claim wording, framing judge) put counts here."""
+    vals = [v for r in runs for v in (r["summary"].get("stories") or {}).values()]
+    return metric_kind("stories", vals) == "share"
+
+
 def hard_stories(step: Step, runs: list[dict]) -> str:
     runs = [r for r in runs if r["summary"].get("stories")]
     if not runs:
@@ -279,17 +374,17 @@ def hard_stories(step: Step, runs: list[dict]) -> str:
         v = [r["summary"]["stories"].get(sid) for r in runs if not is_code(r)]
         v = [x for x in v if x is not None] or [r["summary"]["stories"].get(sid) for r in runs]
         v = [x for x in v if x is not None]
-        return sum(v) / len(v) if v else 1.0
-    sids.sort(key=lambda s: (mean(s), s))
-    # A step's per-story number is a share (0 to 1: same-story accuracy, coverage) or a count (blindspots,
-    # framing points, flagged claims). A count used to be printed as a percent too: 76 points read "7600".
-    vals = [v for r in runs for v in r["summary"]["stories"].values() if isinstance(v, (int, float))]
-    shares = all(0 <= v <= 1 for v in vals)
-    top = max(vals, default=0) or 1
-
-    def shown(v) -> tuple[float, str]:
-        """(how full the cell is drawn, 0-100; the text in it)"""
-        return (v * 100, f"{v * 100:.0f}") if shares else (v / top * 100, f"{v:g}")
+        return sum(v) / len(v) if v else (1.0 if shares else 0)
+    shares = stories_are_shares(runs)
+    if shares:
+        sids.sort(key=lambda s: (mean(s), s))                    # hardest (lowest share right) on top
+        shade, cell = (lambda v: v), (lambda v: f"{v * 100:.0f}")
+        say = lambda v: f"{v:.0%} of its labeled items right"
+    else:                                                        # counts: most on top, shaded against the largest
+        sids.sort(key=lambda s: (-mean(s), s))
+        top = max([v for r in runs for v in r["summary"]["stories"].values() if _number(v)] + [1])
+        shade, cell = (lambda v: v / top), count
+        say = lambda v: f"{count(v)} (the step's count for this story)"
     out = ['<div class="scroll"><table class="heat"><thead><tr><th class="story">Story</th>']
     out += [f'<th><span class="{"code-name" if is_code(r) else ""}">{esc(r["model"].removeprefix(CODE_PREFIX))}</span>'
             f'<span class="sub">{esc(r["version"])}</span></th>' for r in runs]
@@ -303,14 +398,12 @@ def hard_stories(step: Step, runs: list[dict]) -> str:
             if v is None:
                 out.append('<td class="none" data-tip="not in this run">·</td>')
                 continue
-            fill, text = shown(v)
-            tip = (f"{run_name(r)}\n{sid} {title}\n" +
-                   (f"{v:.0%} of its labeled items right" if shares else f"{v:g} in this story (a count, not a share)"))
-            out.append(f'<td class="cell{" strong" if fill > 55 else ""}" style="--p:{fill:.0f}%" '
-                       f'data-tip="{esc(tip)}">{text}</td>')
-        fill, text = shown(mean(sid))
-        out.append(f'<td class="cell avg{" strong" if fill > 55 else ""}" style="--p:{fill:.0f}%">'
-                   f'{text if shares else f"{mean(sid):.1f}"}</td></tr>')
+            tip = f"{run_name(r)}\n{sid} {title}\n{say(v)}"
+            out.append(f'<td class="cell{" strong" if shade(v) > 0.55 else ""}" style="--p:{shade(v) * 100:.0f}%" '
+                       f'data-tip="{esc(tip)}">{cell(v)}</td>')
+        m = mean(sid)
+        out.append(f'<td class="cell avg{" strong" if shade(m) > 0.55 else ""}" style="--p:{shade(m) * 100:.0f}%">'
+                   f'{cell(m)}</td></tr>')
     out.append("</tbody></table></div>")
     return "".join(out)
 
@@ -350,17 +443,22 @@ def mistakes(step: Step, runs: list[dict], out_dir=None) -> str:
 def headline_sentence(step: Step, runs: list[dict]) -> str:
     main = step.headline[0]
     mname = metric_info(step, main)[0]
-    scored = [r for r in runs if isinstance(r["summary"].get(main), (int, float))]
+    scored = [r for r in runs if _number(r["summary"].get(main))]
+    kind, direction = column(main, runs)
+    if not direction:
+        return (f'<p class="lede">{esc(mname)} is a number to read, not a score to beat, so no run is called '
+                f'best.</p>' if scored else "")
     model = [r for r in scored if not is_code(r)]
     code = [r for r in scored if is_code(r)]
+    pick = min if direction == "lower" else max
     parts = []
     if model:
-        b = max(model, key=lambda r: r["summary"][main])
-        parts.append(f"Best model run: <b>{esc(run_name(b))}</b>, {esc(mname)} <b>{num(b['summary'][main])}</b> "
+        b = pick(model, key=lambda r: r["summary"][main])
+        parts.append(f"Best model run: <b>{esc(run_name(b))}</b>, {esc(mname)} <b>{show(kind, b['summary'][main])}</b> "
                      f"at {esc(usd(b.get('cost_per_story_usd')))} per story")
     if code:
-        c = max(code, key=lambda r: r["summary"][main])
-        parts.append(f"plain-code baseline {esc(run_name(c))}: {num(c['summary'][main])}")
+        c = pick(code, key=lambda r: r["summary"][main])
+        parts.append(f"plain-code baseline {esc(run_name(c))}: {show(kind, c['summary'][main])}")
     return f'<p class="lede">{"; ".join(parts)}.</p>' if parts else ""
 
 
@@ -413,7 +511,7 @@ td.n{text-align:right;font-family:var(--mono);font-size:12px;white-space:nowrap}
 td.bar{position:relative;min-width:78px;font-family:var(--mono);font-size:12px}
 td.bar .fill{position:absolute;left:10px;bottom:5px;height:3px;width:calc((100% - 20px) * var(--wn,0));
 background:var(--ok);border-radius:2px;opacity:.55}
-td.bar.top .v{font-weight:600}
+td.bar.top .v,td.n.top{font-weight:600}
 .chip{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;font-size:11px;line-height:18px;font-weight:500}
 .chip.best{background:var(--best-bg);color:var(--best-fg)}.chip.warn{background:var(--warn-bg);color:var(--warn-fg)}
 details.notes summary,details.mist summary{cursor:pointer;color:var(--muted);font-size:13px}
@@ -489,20 +587,28 @@ def build(step: Step, out_dir=None, rows: list[dict] | None = None) -> str:
         body.append(f'<section class="split"><div class="block"><h2>{esc(name)} <span class="muted">· {n_st} stories, '
                     f'{plural(len(rs), "run")}</span></h2><p class="what">{esc(note)}</p>{headline_sentence(step, rs)}</div>')
         if step.headline:
-            body.append(f'<div class="block"><h3>Quality against cost</h3><p class="what">One dot per run. Up is a '
-                        f'better {esc(main_name)}; left is cheaper. Hover a dot for its numbers.</p>{scatter(step, rs)}</div>')
-            body.append(f'<div class="block"><h3>Scores</h3><p class="what">Best run first. The bar under each score '
-                        f'runs from 0 to 1; the best value in a column is bold.</p>{scores_table(step, rs)}'
-                        f'{score_notes(step)}</div>')
+            main_dir = column(step.headline[0], rs)[1]
+            up = {"higher": "Up is a better", "lower": "Down is a better"}.get(main_dir, "Up is a higher")
+            first = ("Best run first." if main_dir else f"Sorted by {esc(main_name)}, highest first.")
+            body.append(f'<div class="block"><h3>Quality against cost</h3><p class="what">One dot per run. {up} '
+                        f'{esc(main_name)}; left is cheaper. Hover a dot for its numbers.</p>{scatter(step, rs)}</div>')
+            body.append(f'<div class="block"><h3>Scores</h3><p class="what">{first} The bar under each share '
+                        f'runs from 0 to 1; counts are plain numbers. The best value in a column is bold: the lowest '
+                        f'for cost and time, the highest for scores like accuracy. Counts to read, with no better '
+                        f'way, are left plain.</p>{scores_table(step, rs)}{score_notes(step)}</div>')
         c = confusion(step, rs)
         if c:
             body.append(f'<div class="block"><h3>Where the mistakes fall</h3><p class="what">Each grid is one run. '
                         f'Rows are the answer key, columns what the model said; the number is how many labeled '
                         f'items landed there.</p>{c}</div>')
         h = hard_stories(step, rs)
-        if h:
+        if h and stories_are_shares([r for r in rs if r["summary"].get("stories")]):
             body.append(f'<div class="block"><h3>Which stories are hard</h3><p class="what">Each cell is the share of '
                         f'a story\'s labeled items a run got right, in percent; hardest stories on top.</p>{h}</div>')
+        elif h:
+            body.append(f'<div class="block"><h3>Story by story</h3><p class="what">Each cell is the step\'s count for '
+                        f'one story, as a plain number (not a percent); darker is more, and the stories with the most '
+                        f'are on top.</p>{h}</div>')
         m = mistakes(step, [r for r in rs if not is_code(r)], out_dir)
         if m:
             body.append(f'<div class="block"><h3>Every mistake, with the model\'s reason</h3>{m}</div>')
