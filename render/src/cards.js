@@ -283,6 +283,8 @@ export function drawSources(ctx, s) {
   const sides = sc.sides || [];
   const segs = [
     ...sides.map((sd) => ({n: sd.read || 0, color: sd.side === 'A' ? PAL.sideA : PAL.sideB, label: sideParts(sd.label)[0], sub: sideParts(sd.label)[1]})),
+    // a story with no divide: its home country's outlets, the "local" in the closing line
+    ...(sc.local?.read ? [{n: sc.local.read, color: PAL.landBase, label: 'Local outlets', sub: sc.local.place || ''}] : []),
     {n: sc.elsewhere || 0, color: PAL.other, label: 'Elsewhere', sub: sc.groups?.wire ? `including ${sc.groups.wire} wire service${sc.groups.wire === 1 ? '' : 's'}` : ''},
   ].filter((g) => g.n > 0);
   const total = segs.reduce((a, g) => a + g.n, 0) || 1;

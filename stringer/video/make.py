@@ -26,14 +26,18 @@ MUSIC = paths.PRIVATE / "video_assets" / "music" / "clean-reportage.mp3"
 
 
 def inputs(story_dir: Path) -> tuple[dict, dict, dict]:
-    """script.json (with today's credits), the checked story file and module 7's packet (for the on-screen check)."""
+    """script.json (with today's credits and sources card), the checked story file and module 7's packet (for the on-screen check)."""
     script = json.loads((story_dir / "script.json").read_text(encoding="utf-8"))
     facts, _ = story_file.read(story_dir)
     sf = fact_check.read_checked(story_dir)
     arts = fact_check.read_articles(story_dir)
     arts = {a["id"]: a for a in arts} if isinstance(arts, list) else arts
     p7 = sw.packet(sf, facts, sw.contexts_for(facts, arts))
-    return dict(script, credits=sw.credits(sf, p7)), sf, p7         # code-made: an older script gets today's credits
+    # code-made, so an older script gets today's credits and sources card
+    script = dict(script, credits=sw.credits(sf, p7))
+    if script.get("sources_card"):
+        script["sources_card"] = sw.sources_card(sf, p7)
+    return script, sf, p7
 
 
 def prepare(story_dir: Path, engine, out_dir: Path, *, voice_cache: Path | None = None, music: Path | None = None,

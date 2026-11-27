@@ -291,6 +291,15 @@ def test_no_divide_story_has_no_sides_beat_and_says_coverage_agrees():
     assert not [x for x in probs if x["rule"] in ("order", "closing", "sides line")], probs
 
 
+def test_a_no_divide_card_splits_local_from_elsewhere_like_the_closing_line():
+    p = pk("no divide")
+    sf = {"event": {"country": "Lorne", "url": ""}, "sides": {"kind": "no real divide"}}
+    sc = sw.sources_card(sf, p)
+    assert sc["read"] == 4 and sc["sides"] == [] and sc["local"] == {"read": 3, "place": "Lorne"} and sc["elsewhere"] == 1
+    two = sw.sources_card(sf, pk())
+    assert "local" not in two and sum(x["read"] for x in two["sides"]) + two["elsewhere"] == two["read"]
+
+
 def test_empty_side_needs_only_that_sides_mark_and_says_no_coverage():
     p = pk("empty side")
     assert p["has_sides"] and p["empty_side"] == "B" and list(p["points"]) == ["A1"]

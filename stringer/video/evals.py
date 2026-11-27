@@ -54,6 +54,12 @@ DRAW_LEAD_FRAMES = {"map_locate": 4, "map_link": 4, "map_spread": 4}
 LAYOUT_SAFE = (60, 150, 960, 1440)   # render/src/layout.js SAFE (left, top, right, bottom), output pixels
 LAYOUT_MIN_PX = 24                   # render/src/layout.js MIN_PX
 ALLSIDES_SIDES = {"us_left", "us_right"}    # US lens sides built from AllSides leans (module 4)
+
+
+def bar_total(sc: dict) -> int:
+    """The articles the sources card's balance bar shows: each side, the home country's outlets, and elsewhere."""
+    return (sum(s.get("read") or 0 for s in sc.get("sides") or []) + ((sc.get("local") or {}).get("read") or 0)
+            + (sc.get("elsewhere") or 0))
 LABEL_HIDDEN_ON = {"sides", "sources"}      # shots that draw no "Source:" label
 
 
@@ -77,9 +83,9 @@ def on_screen(pl: dict, p7: dict) -> list[str]:
         out += [f"beat {b['n']} ({b['shot']}): {e}" for e in errs]
     sc = pl.get("sources_card") or {}
     read = sc.get("read") or 0
-    parts = sum(s.get("read") or 0 for s in sc.get("sides") or []) + (sc.get("elsewhere") or 0)
+    parts = bar_total(sc)
     if parts != read:
-        out.append(f"sources card: the sides and elsewhere add up to {parts}, the card says {read} read")
+        out.append(f"sources card: the sides, local and elsewhere add up to {parts}, the card says {read} read")
     if len(sc.get("outlets") or []) > read:
         out.append(f"sources card: {len(sc['outlets'])} outlets listed for {read} articles read")
     return out
@@ -101,7 +107,7 @@ def required(pl: dict, script: dict) -> list[str]:
     sc = pl.get("sources_card") or {}
     if not beats or beats[-1]["shot"] != "sources":
         out.append("the video doesn't end on the sources card")
-    if sum(s.get("read") or 0 for s in sc.get("sides") or []) + (sc.get("elsewhere") or 0) <= 0:
+    if bar_total(sc) <= 0:
         out.append("the balance bar would be empty")
     credits = sc.get("credits") or []
     if not any(str(c).startswith("Events by Monitor the Situation") for c in credits):

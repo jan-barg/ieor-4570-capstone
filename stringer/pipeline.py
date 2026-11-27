@@ -136,7 +136,8 @@ def run(raw_event: dict, ticket=None, *, stories_dir: Path | None = None, raw_di
     price = gate_rules.config()["cost"]["tavily_usd_per_credit"]
     meter, t_all = Meter(), time.time()
     tr = tracing.tracer()
-    tid = tr.new_trace(f"video:{ev.short} {ev.title[:60]}", {"event": ev.id, "title": ev.title})
+    tid = tr.new_trace(f"video:{ev.short} {ev.title[:60]}", {"event": ev.id, "title": ev.title},
+                       input={"event": ev.id, "title": ev.title}, keep_open=True)
     before_paths = (paths.STORIES, paths.RAW)                 # put back in the `finally` below
     paths.STORIES = Path(stories_dir or LIVE / "stories")     # live stories stay out of the frozen test set
     paths.RAW = Path(raw_dir or LIVE / "raw")
@@ -316,4 +317,6 @@ def run(raw_event: dict, ticket=None, *, stories_dir: Path | None = None, raw_di
         raise
     finally:
         paths.STORIES, paths.RAW = before_paths
+        tr.end_trace(tid, output={k: rec.get(k) for k in ("outcome", "why", "video", "seconds", "usd", "model_calls")},
+                     error=rec.get("why") if rec.get("outcome") == "failed" else None)
         tr.flush()

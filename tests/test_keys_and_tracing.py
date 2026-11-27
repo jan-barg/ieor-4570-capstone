@@ -1,4 +1,5 @@
 """Key lookup and the one-trace-per-video plumbing. No keys, no network."""
+import json
 import subprocess
 from types import SimpleNamespace
 
@@ -76,3 +77,54 @@ def test_the_voice_director_call_carries_the_trace(monkeypatch):
     monkeypatch.setattr(models, "complete", complete)
     direct.model_call([{"role": "user", "content": "x"}], name="voice direction", model="haiku-5-5", trace_id="t-1")
     assert seen == {"step": "voice_direction", "trace_id": "t-1"}
+
+
+class FakeObs:
+    def __init__(self, log, n, **kw):
+        self.id, self.log, self.kw, self.updates, self.ended = f"obs-{n}", log, kw, [], False
+
+    def update(self, **kw):
+        self.updates.append(kw)
+
+    def end(self):
+        self.ended = True
+
+
+class FakeLangfuse:
+    def __init__(self):
+        self.obs = []
+
+    def create_trace_id(self):
+        return "trace-1"
+
+    def start_observation(self, **kw):
+        o = FakeObs(self, len(self.obs), **kw)
+        self.obs.append(o)
+        return o
+
+    def flush(self):
+        pass
+
+
+def test_a_video_trace_has_an_input_an_output_and_its_calls_nest_under_it(tmp_path):
+    lf = FakeLangfuse()
+    tr = tracing.Tracer(langfuse_client=lf, log_dir=tmp_path)
+    tid = tr.new_trace("video:abc", {"event": "e"}, input={"event": "e", "title": "Made-up title"}, keep_open=True)
+    root = lf.obs[0]
+    assert json.loads(root.kw["input"]) == {"event": "e", "title": "Made-up title"} and not root.ended
+    tr.span(name="step.sides", trace_id=tid, output={"seconds": 1.0})
+    assert lf.obs[1].kw["trace_context"] == {"trace_id": "trace-1", "parent_span_id": "obs-0"}
+    tr.end_trace(tid, output={"outcome": "done"})
+    assert root.ended and json.loads(root.updates[-1]["output"]) == {"outcome": "done"} and root.updates[-1]["level"] == "DEFAULT"
+    tr.span(name="late", trace_id=tid)                                  # after the end: a plain call in the trace
+    assert lf.obs[2].kw["trace_context"] == {"trace_id": "trace-1"}
+
+
+def test_a_trace_left_open_is_closed_on_flush_and_a_closed_one_ends_at_once(tmp_path):
+    lf = FakeLangfuse()
+    tr = tracing.Tracer(langfuse_client=lf, log_dir=tmp_path)
+    tr.new_trace("eval:x")
+    assert lf.obs[0].ended and lf.obs[0].kw["input"] is None
+    tr.new_trace("video:y", keep_open=True)
+    tr.flush()
+    assert lf.obs[1].ended and lf.obs[1].updates[-1]["level"] == "ERROR"

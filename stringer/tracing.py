@@ -34,18 +34,39 @@ class Tracer:
         self.lf = langfuse_client
         if self.lf is None and enable_langfuse and os.environ.get("STRINGER_NO_LANGFUSE") != "1":
             self.lf = _langfuse_from_keychain()
+        self._roots: dict = {}        # trace id -> its top span, while a run keeps it open (end_trace closes it)
 
     # -- traces ---------------------------------------------------------------
-    def new_trace(self, name: str, metadata: dict | None = None) -> str:
+    def new_trace(self, name: str, metadata: dict | None = None, *, input=None, keep_open: bool = False) -> str:
+        """A new trace. Langfuse shows a trace's input and output from its top span: `input` goes there now;
+        with keep_open, the span stays open, every later call nests under it, and end_trace gives the output."""
         if self.lf is not None:
             tid = self.lf.create_trace_id()
             root = self.lf.start_observation(trace_context={"trace_id": tid}, name=name,
-                                             as_type="span", metadata=metadata or {})
-            root.end()
+                                             as_type="span", input=_clip(input), metadata=metadata or {})
+            if keep_open:
+                self._roots[tid] = root
+            else:
+                root.end()
         else:
             tid = uuid.uuid4().hex
-        self._local(dict(kind="trace", trace_id=tid, name=name, metadata=metadata or {}))
+        self._local(dict(kind="trace", trace_id=tid, name=name, metadata=metadata or {}, input=_clip(input)))
         return tid
+
+    def end_trace(self, trace_id: str, output=None, error: str | None = None):
+        """Close a trace opened with keep_open, with its output (and the error, if the run failed)."""
+        self._local(dict(kind="trace_end", trace_id=trace_id, output=_clip(output), error=error))
+        root = self._roots.pop(trace_id, None)
+        if root is not None:
+            root.update(output=_clip(output), level="ERROR" if error else "DEFAULT", status_message=error)
+            root.end()
+
+    def _ctx(self, trace_id):
+        """Where a call goes: under its trace's open top span when there is one."""
+        if not trace_id:
+            return None
+        root = self._roots.get(trace_id)
+        return {"trace_id": trace_id, "parent_span_id": root.id} if root is not None else {"trace_id": trace_id}
 
     # -- events ---------------------------------------------------------------
     def generation(self, *, name, model, litellm_model, trace_id=None, input=None, output=None,
@@ -58,7 +79,7 @@ class Tracer:
         self._local(rec)
         if self.lf is not None:
             g = self.lf.start_observation(
-                trace_context={"trace_id": trace_id} if trace_id else None, name=name,
+                trace_context=self._ctx(trace_id), name=name,
                 as_type="generation", model=litellm_model, input=_clip(input), metadata=metadata or {},
                 level="ERROR" if error else "DEFAULT", status_message=error)
             g.update(output=_clip(output), usage_details=_lf_usage(usage),
@@ -74,7 +95,7 @@ class Tracer:
         self._local(rec)
         if self.lf is not None:
             s = self.lf.start_observation(
-                trace_context={"trace_id": trace_id} if trace_id else None, name=name,
+                trace_context=self._ctx(trace_id), name=name,
                 as_type="tool", input=_clip(input), metadata=metadata or {},
                 level="ERROR" if error else "DEFAULT", status_message=error)
             s.update(output=_clip(output))
@@ -87,6 +108,8 @@ class Tracer:
             self.lf.create_score(name=name, value=value, trace_id=trace_id, comment=comment)
 
     def flush(self):
+        for tid in list(self._roots):            # a run that never closed its trace: close it, or it's never sent
+            self.end_trace(tid, error="the run ended without closing its trace")
         if self.lf is not None:
             self.lf.flush()
 

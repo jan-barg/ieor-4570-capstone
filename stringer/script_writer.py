@@ -1273,11 +1273,17 @@ def credits(sf: dict, p: dict) -> list[str]:
 
 
 def sources_card(sf: dict, p: dict) -> dict:
+    """The sources card's numbers, the same split the closing line is given: per side for a two-sided story; for
+    one with no divide, the home country's outlets ("local", searched for coverage, not a side) and elsewhere."""
     r = p["read"]
     sides = [dict(side=g, side_id=((sf.get("sides") or {}).get(g) or {}).get("side_id"), label=p["labels"][g], read=r[g])
              for g in "AB"] if p["two_sided"] else []
-    return dict(read=r["all"], sides=sides, elsewhere=r["elsewhere"] if p["two_sided"] else r["all"], groups=r["groups"],
-                outlets=r["outlets"], credits=credits(sf, p), ai_mark=AI_MARK.format(n=r["all"]))
+    local = 0 if p["two_sided"] else r["groups"].get("local", 0)
+    out = dict(read=r["all"], sides=sides, elsewhere=r["elsewhere"] if p["two_sided"] else r["all"] - local,
+               groups=r["groups"], outlets=r["outlets"], credits=credits(sf, p), ai_mark=AI_MARK.format(n=r["all"]))
+    if local:
+        out["local"] = dict(read=local, place=(sf.get("event") or {}).get("country") or "")
+    return out
 
 
 def _beat_out(n: int, b: dict, p: dict, final: dict) -> dict:
