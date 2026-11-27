@@ -5,7 +5,7 @@ from .runner import Step
 
 
 def names() -> list[str]:
-    return ["same_story", "brief_read", "brief_onecall", "brief_merge", "brief_sides", "brief_blind", "brief_framing", "claim_wording", "framing_judge", "fact_check", "lens", "script"]
+    return ["same_story", "brief_read", "brief_onecall", "brief_merge", "brief_sides", "brief_blind", "brief_framing", "claim_wording", "framing_judge", "fact_check", "lens", "script", "gate_policy"]
 
 
 def get(name: str, **kw) -> Step:
@@ -45,4 +45,7 @@ def get(name: str, **kw) -> Step:
     if name == "script":
         from .script_eval import ScriptEval
         return ScriptEval(**kw)
+    if name == "gate_policy":
+        from .gate_policy_eval import GatePolicyEval
+        return GatePolicyEval(**kw)
     raise KeyError(f"no eval for step '{name}'; known: {', '.join(names())}")

@@ -1,0 +1,58 @@
+# Module 0, the Gate: which events may become videos, and whether one can start now.
+# Decided Nov 26 (Jan, decisions page "Stringer Gate Decisions"). Environment variables override a few
+# of these on the site: GATE_MODE, GATE_STORE, GATE_SALT (see stringer/gate/__init__.py).
+
+[eligibility]                    # settled Nov 23
+categories = ["conflict", "political", "economic", "disaster", "humanitarian"]
+min_severity = 2
+min_confidence = 31              # Developing or Verified, not Unconfirmed
+min_reports = 7
+
+[limits]
+mode = "open"                    # open: anyone can make a video from the front page (Jan, Nov 26); closed: gallery only
+videos_per_day = 30              # a count, not dollars (Jan, Nov 26)
+day_timezone = "America/New_York"
+per_visitor_per_hour = 3
+at_once = 3                      # videos being made at the same time, whole site
+max_video_usd = 5.00             # checked before money is spent: the estimate at start and after the searches
+claim_lease_minutes = 20         # a video with no progress for this long counts as crashed
+max_tries = 3                    # crashed runs per event; a pipeline "no video" is final
+tavily_min_credits = 30          # pause new videos below this many Tavily credits left
+tavily_check_minutes = 10        # how long one look at Tavily's credit count is reused
+beat_seconds = 60                # how often a running video tells the Gate it is still alive
+
+[reports]
+hide_after = 1                   # viewer reports that hide a video until Jan looks (Jan, Nov 26)
+per_visitor_per_day = 5
+note_max_chars = 1000
+reasons = ["child_victim", "wrong_facts", "one_sided", "offensive", "other"]
+
+# ---- What a video costs, worked out before it starts (Jan, Nov 26: "pre-computed instead of just
+# wasting five dollars"). Each step's tokens are the 95th percentile per story in the call log
+# (stringer_private/runs/calls-*.jsonl, Nov 24-26 runs); prices come from the step's model in
+# config/models.toml, so switching a step to a dearer model raises the estimate too.
+# per_article: the tokens are for `articles_p95` articles and scale with the real count after Gather.
+
+[cost]
+articles_p95 = 19                # articles step 1 read per story (95th percentile)
+tavily_usd_per_credit = 0.008    # Tavily's pay-as-you-go price
+tavily_credits = 12              # most credits one test story used (median 7)
+voice_and_render_usd = 0.10      # ElevenLabs voice plus the render (module 8 average about $0.07)
+
+[cost.steps]
+# step = [input tokens, output tokens, stage]; stage "start" runs before the searches end
+query_writer = [813, 192, "start"]
+lens = [7186, 806, "start"]
+same_story = [23045, 6693, "after_gather"]
+brief_read = [62071, 34246, "after_gather"]      # per_article
+brief_merge = [24924, 10126, "after_gather"]
+brief_blind = [19712, 1785, "after_gather"]
+brief_framing = [4358, 1797, "after_gather"]
+fact_check = [79459, 44497, "after_gather"]
+script = [62582, 47073, "after_gather"]
+script_line_check = [20000, 5000, "after_gather"]
+script_words = [5000, 700, "after_gather"]
+voice_direction = [3000, 1500, "after_gather"]
+
+[cost.per_article]
+steps = ["brief_read"]
