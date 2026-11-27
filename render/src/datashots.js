@@ -40,7 +40,8 @@ function end(ctx, s, {chip = true} = {}) {
 
 const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
-// ---- big number: the figure counts up while it is said; a second figure, if any, gets a bar each ------
+// ---- big number: the figure is there from the start, faint, and inks in while it is said (Jan's pick,
+// Nov 27: a card that waits for its number looked empty for seconds); a second figure gets a bar each ------
 
 export function drawBigNumber(ctx, s) {
   const {beat, t} = s;
@@ -68,13 +69,13 @@ export function drawBigNumber(ctx, s) {
   ctx.globalAlpha = 1;
   y += unitLines.length * 14 + 14;
 
-  const pc = easeOut((t - count.start) / Math.max(8, count.end - count.start));
-  ctx.globalAlpha = clamp01((t - count.start + 6) / 6);
+  // the whole figure from the start (never a number it isn't), at 40% ink until it is said
+  const pc = easeOut((t - count.start) / Math.max(8, count.end - count.start));   // the bar below grows with it
+  const spoken = clamp01((t - count.start + 6) / 6);
+  ctx.globalAlpha = clamp01(t / 8) * (0.4 + 0.6 * spoken);
   ctx.font = `400 ${size}px ${SERIF}`;
   ctx.fillStyle = PAL.ink;
-  // count up on the full value, then show the fitted lines (the same text once the count ends)
-  const outLines = pc >= 1 || !pv ? lines : wrap(ctx, formatCount(pv, pc), W_TEXT);
-  outLines.forEach((l, i) => ctx.fillText(l, L.left - 2, y + size * 0.78 + i * size));
+  lines.forEach((l, i) => ctx.fillText(l, L.left - 2, y + size * 0.78 + i * size));
   ctx.globalAlpha = 1;
   y += vh + 12;
 
@@ -84,7 +85,7 @@ export function drawBigNumber(ctx, s) {
   for (let x = 0; x < W_TEXT * sweep; x += 1.8) dot(ctx, L.left + x + (r() - 0.5) * 0.4, y, 0.9, PAL.mustard);
   y += 10;
   if (labelLines.length) {
-    ctx.globalAlpha = clamp01((t - count.start - 6) / 10);
+    ctx.globalAlpha = clamp01((t - 4) / 10);
     ctx.font = `italic 400 19px ${SERIF}`;
     ctx.fillStyle = PAL.ink;
     labelLines.forEach((l, i) => ctx.fillText(l, L.left, y + 18 + i * 23));
