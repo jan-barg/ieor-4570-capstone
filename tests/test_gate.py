@@ -533,6 +533,18 @@ def test_remake_clears_a_hide_and_a_report_hides_only_a_video():
     assert g.view(eid) == {"state": "ready", "failed": False} and g.start(ev(), "v").ok
 
 
+def test_a_remake_drops_keep_it_up_so_a_report_hides_the_new_video():
+    g = gate(cfg=cfg_with(per_visitor_per_hour=10))
+    eid = ev()["id"]
+    g.start(ev(), "v").ticket.finish(video={"url": "old"})
+    assert g.report(eid, "viewer", "wrong_facts")["hidden"] is True
+    g.restore(eid, by="jan", keep_up=True)
+    assert g.report(eid, "viewer2", "other")["hidden"] is False          # the old video was kept up
+    g.remake(eid, by="jan")
+    g.start(ev(), "v").ticket.finish(video={"url": "new"})
+    assert g.report(eid, "viewer3", "wrong_facts")["hidden"] is True     # the new one hides until Jan looks
+
+
 def test_finish_takes_an_empty_reason_as_no_video_and_nothing_as_failed():
     g = gate(cfg=cfg_with(per_visitor_per_hour=10))
     assert g.start(ev("a"), "v").ticket.finish(no_video="")["outcome"] == "no_video"

@@ -584,13 +584,14 @@ class Gate:
                                                   reports_since_review=0))
 
     def remake(self, event_id: str, by: str, note: str = "") -> dict:
-        """Let an event be made again (Jan only): clears its video, "no video", tries and any hide, so a
-        video taken down for being wrong can be made afresh without first putting the wrong one back up."""
+        """Let an event be made again (Jan only): clears its video, "no video", tries, any hide and "keep it
+        up", so a video taken down for being wrong can be made afresh without first putting the wrong one back
+        up, and a report on the new video hides it until Jan looks (Jan, November 27)."""
         def change(c):
             c.setdefault("history", []).append({"outcome": f"reset for a remake by {by}", "at": _iso(self.now()),
                                                 "video": c.get("video")})
             c.update(state=None, ticket=None, tries=0, video=None, no_video_reason=None, hidden=False,
-                     hidden_by=None, reports_since_review=0)
+                     hidden_by=None, keep_up=False, reports_since_review=0)
         return self._admin_set(event_id, "remake", by, note, change)
 
     def reports(self, event_id: str | None = None) -> list[dict]:
