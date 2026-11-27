@@ -6,18 +6,24 @@ responses, logs) lives in `../stringer_private/` (or wherever `STRINGER_PRIVATE`
 never go into a public repo: Monitor the Situation's terms forbid republishing its data.
 Events by Monitor the Situation (monitor-the-situation.com).
 
-The design is in `../STRINGER_SYSTEM_MAP.md`. Built so far: module 1 (Gather), module 3 (Outlet
-labels) and the shared model layer.
+The design is in `../STRINGER_SYSTEM_MAP.md`. Built so far: modules 1 to 8 (Gather through the
+finished video), the shared model layer and the shared eval runner. Still to build: module 0 (the
+Gate) and module 9 (the website).
 
 ## Setup
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest -q          # offline, no keys needed except outlets.csv in stringer_private
+cd render && npm ci && cd ..           # module 8's drawing code (Remotion, headless Chrome); also needs ffmpeg
 ```
 
-Keys go in `.env` (git-ignored; copy `.env.example`): `TAVILY_API_KEY`, `GUARDIAN_API_KEY`,
-`ANTHROPIC_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (optional `LANGFUSE_HOST`).
+Module 8 also needs its private assets in `stringer_private/video_assets/`: the map shapes (`geo/`),
+the music bed (`music/`) and the portrait photos (`people/`).
+
+Keys go in `.env` (git-ignored; copy `.env.example`, which lists every name): `TAVILY_API_KEY`,
+`GUARDIAN_API_KEY`, `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY` (module 8's narrator),
+`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (optional `LANGFUSE_HOST`), and optional `OPENROUTER_API_KEY`.
 A real environment variable wins over the file; the macOS Keychain is a fallback. Vertex models use Application Default
 Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project` header).
 
@@ -37,7 +43,17 @@ Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project`
 | `scripts/coverage_report.py` | Module 3's eval and module 1's proxy measures on the frozen stories |
 | `stringer/pick.py`, `scripts/pick_articles.py` | Picks the (at most) 10 balanced articles the later steps read; writes `picked.json` per story |
 | `stringer/same_story.py`, `scripts/filter_articles.py` | Module 2: marks each article same story / follow-up / different (pick skips "different"); writes `verdict` into `articles.jsonl` and `same_story.json` per story |
-| `stringer/evals/` | The shared eval runner: runs a step on the frozen stories with a chosen model, scores it against an answer key, caches every model answer, hard cost cap, one Langfuse trace per run, a visual report per step (`report.py`). Module 2's plug-in is `same_story_eval.py` |
+| `stringer/lens.py`, `stringer/balance.py`, `scripts/gather_live.py`, `scripts/balance_followup.py` | Module 4: chooses a live story's two sides (or none), then runs one follow-up search round when a side comes up short |
+| `stringer/clean.py` | Strips site menus from article text by code, and spots wire copies (8-word runs) |
+| `stringer/brief_read.py`, `brief_merge.py`, `brief_sides.py`, `brief_blind.py`, `brief_framing.py`, `story_file.py`, `story_brief.py`, `scripts/build_story_files.py` | Module 5: the Story File (news brief). Reads each article into fact cards, merges them into claims, adds sides, blindspots and flags, and says how each side tells it. `brief_onecall.py` is the one-call baseline it beats |
+| `stringer/fact_check.py`, `scripts/check_story_files.py` | Module 6: the fact check. Gives every claim a verdict and writes `checked_story_file.json` |
+| `stringer/script_writer.py`, `stringer/shots.py`, `config/shot_catalog.json`, `scripts/write_scripts.py` | Module 7: the 60-second script, beat by beat, every line citing its claims. `shots.py` holds the shot catalog and the checks modules 7 and 8 share |
+| `stringer/video/`, `scripts/make_videos.py` | Module 8: a script in, a vertical MP4 out. Checks the script, adds voice directions, records the ElevenLabs voice with its timings, finds places and portraits, builds the render plan, renders, then sets loudness and writes the poster and captions (`make.py` runs the steps in order) |
+| `render/` | Module 8's drawing code (Remotion): every shot kind, the maps and the props. `render.mjs` draws a render plan into an MP4 |
+| `scripts/eval_video.py`, `stringer/video/evals.py` | Module 8's evals and their visual report |
+| `scripts/build_video_places.py`, `scripts/count_people.py`, `scripts/fetch_portraits.py` | One-time builds for module 8: the place index from the map files, the list of people to draw, and their photos |
+| `stringer/evals/` | The shared eval runner: runs a step on the frozen stories with a chosen model, scores it against an answer key, caches every model answer, hard cost cap, one Langfuse trace per run, a visual report per step (`report.py`). One plug-in per step, listed in `steps.py` |
+| `tests/` | Offline tests on made-up data |
 | `scripts/run_eval.py` | The eval runner's command: `estimate`, `run`, `rescore`, `compare`, `report` |
 | `scripts/build_same_story_sample.py`, `scripts/same_story_labels.py` | Module 2's answer key: the sample to label, then the labels file from the review page plus Claude's drafts and later fixes |
 
@@ -58,6 +74,15 @@ Credentials on project `agentic-ai-msds` (global endpoint, `x-goog-user-project`
 .venv/bin/python -m scripts.filter_articles --reapply           # after remerge_frozen: put the verdicts back, free
 .venv/bin/python -m scripts.coverage_report
 .venv/bin/python build/build_outlets.py --force                # rebuild outlets.csv from the seed
+.venv/bin/python -m scripts.gather_live --list                 # live events with 5+ reports, free
+.venv/bin/python -m scripts.gather_live --event <id> --dry-run # the sides plus a credit estimate, a fraction of a cent
+.venv/bin/python -m scripts.build_story_files live --only <id> --cap <usd>   # module 5 on one story, paid
+.venv/bin/python -m scripts.check_story_files run --only <id> --cap <usd>    # module 6, paid
+.venv/bin/python -m scripts.write_scripts estimate --only <id>               # module 7's cost, free
+.venv/bin/python -m scripts.write_scripts run --only <id> --cap <usd>        # module 7, paid
+.venv/bin/python scripts/make_videos.py <id8>                  # module 8: ElevenLabs credits, video in the story's video/
+.venv/bin/python scripts/make_videos.py --voice paced --plan-only   # every story, silent stand-in voice, plans only, free
+.venv/bin/python scripts/eval_video.py --no-layout --broken-renders 0   # module 8's code checks, about a minute
 ```
 
 Every Tavily and Guardian response is saved under `stringer_private/frozen/raw/`, so re-running a
@@ -72,3 +97,6 @@ its eval costs nothing. `remerge_frozen` rewrites `articles.jsonl`, so run
 
 Media bias ratings by AllSides.com (CC BY-NC 4.0). State Media Monitor 2026, MJRC (CC BY 4.0).
 Domain reliability from Lin et al. 2023, PNAS Nexus. Events by Monitor the Situation.
+Maps from Natural Earth (public domain) and GeoNames (CC BY 4.0). Portrait photos from Wikimedia
+Commons, each credited on the video's sources card. Fonts: Inter and Source Serif 4 (SIL OFL,
+licenses in `render/public/fonts/`).
