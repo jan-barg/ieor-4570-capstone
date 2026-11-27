@@ -46,6 +46,34 @@ def on_cost(fn):
             _listeners.remove(fn)
 
 
+# Call listeners: fn(info) after every call, answered or failed, with what the progress page shows
+# (step, name, model, usd, tokens_in, tokens_out, seconds, error). The pipeline's live progress uses it.
+_call_listeners: list = []
+
+
+@contextlib.contextmanager
+def on_call(fn):
+    """While inside the block, fn(info: dict) is called after each model call (any thread). A listener that
+    raises is ignored: watching a call must never break it."""
+    with _listeners_lock:
+        _call_listeners.append(fn)
+    try:
+        yield fn
+    finally:
+        with _listeners_lock:
+            _call_listeners.remove(fn)
+
+
+def _tell_call(info: dict) -> None:
+    with _listeners_lock:
+        fns = list(_call_listeners)
+    for fn in fns:
+        try:
+            fn(info)
+        except Exception:
+            pass
+
+
 def _tell_listeners(step, alias, cost: dict) -> None:
     with _listeners_lock:
         fns = list(_listeners)
@@ -172,6 +200,8 @@ def complete(step: str | None = None, messages: list[dict] | None = None, *, mod
         tracer().generation(name=name or step or alias, model=alias, litellm_model=kw["model"],
                             trace_id=trace_id, input=messages, usage={}, cost={}, start=start,
                             end=end, metadata=dict(metadata or {}, step=step), error=repr(e)[:500])
+        _tell_call(dict(step=step, name=name or step or alias, model=alias, usd=0.0, tokens_in=0, tokens_out=0,
+                        seconds=round((end - start).total_seconds(), 3), error=repr(e)[:200]))
         raise
     end = dt.datetime.now(dt.timezone.utc)
     usage = usage_from(resp)
@@ -181,5 +211,7 @@ def complete(step: str | None = None, messages: list[dict] | None = None, *, mod
                         trace_id=trace_id, input=messages, output=text, usage=usage, cost=cost,
                         start=start, end=end, metadata=dict(metadata or {}, step=step))
     _tell_listeners(step, alias, cost)
+    _tell_call(dict(step=step, name=name or step or alias, model=alias, usd=cost["total"], tokens_in=usage["prompt"],
+                    tokens_out=usage["output"], seconds=round((end - start).total_seconds(), 3), error=None))
     return Result(text=text, model=alias, usage=usage, cost=cost,
                   latency_s=round((end - start).total_seconds(), 3), raw=resp)

@@ -1,23 +1,36 @@
-"""The deploy-test website (web/server.py), offline: the Gate on an in-memory store, its keyword rule in
-place of the model, a made-up event, and a stand-in pipeline."""
+"""The website (web/server.py), offline: the Gate on an in-memory store, its keyword rule in place of the
+model, made-up events and story files, and a stand-in pipeline. Nothing here is real news."""
 from __future__ import annotations
 
+import gzip
+import json
+import os
 import threading
 import time
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 
+import pytest
+
+from stringer import progress as P
 from stringer.gate import Gate, MemoryStore
+from web import data as D
 from web import server
 
 EVENT = {"id": "00000000-0000-4000-8000-0000000000we", "title": "Made-up storm floods the Avalon port",
          "summary": "Invented for the website test.", "category": "disaster", "subtype": "flood",
          "severity": 3, "confidence": 60, "country": "Freedonia", "report_count": 12,
          "created_at": "2026-11-27T10:00:00Z", "sources": []}
+EID = EVENT["id"]
+TOKEN = "made-up-admin-token"
 
 
-def site(monkeypatch, outcome="done"):
+def site(monkeypatch, tmp_path, outcome="done", token=""):
     monkeypatch.delenv("STRINGER_JOB", raising=False)
+    monkeypatch.delenv("STRINGER_VIDEO_BUCKET", raising=False)
     g = Gate(MemoryStore(), complete=None, model="", tavily_left=lambda: 500)
-    s = server.Site(gate=g, fetch=lambda: [EVENT])
+    s = server.Site(gate=g, fetch=lambda: [EVENT], files=D.Files(local=tmp_path / "stories"), admin_token=token)
     done = threading.Event()
 
     def fake_run(raw, ticket, **kw):
@@ -35,44 +48,206 @@ def site(monkeypatch, outcome="done"):
 def wait_for(s, state, timeout=5.0):
     end = time.time() + timeout
     while time.time() < end:
-        if s.record(EVENT["id"])["state"] == state:
+        if s.record(EID)["state"] == state:
             return True
         time.sleep(0.02)
     return False
 
 
-def test_list_click_and_video(monkeypatch):
-    s, done = site(monkeypatch)
+def with_video(s, visitor="maker") -> str:
+    """EVENT with a finished video in the store, the way a run leaves it. Returns the run's ticket id."""
+    t = s.gate.start(EVENT, visitor).ticket
+    t.finish(video={"duration_s": 61.0, "seconds": 240.0, "usd": 0.7, "made_at": "2026-11-27T11:00:00Z"})
     s.refresh()
-    assert "Made-up storm floods the Avalon port" in s.page()
-    r = s.make(EVENT["id"], "visitor-1")
-    assert r["ok"] and r["code"] == "making"
+    return t.id
+
+
+@pytest.fixture
+def serve():
+    """The site's real request handler on a free port."""
+    running = []
+
+    def start(s):
+        h = ThreadingHTTPServer(("127.0.0.1", 0), server.handler_for(s))
+        threading.Thread(target=h.serve_forever, daemon=True).start()
+        running.append(h)
+        return f"http://127.0.0.1:{h.server_address[1]}"
+    yield start
+    for h in running:
+        h.shutdown()
+        h.server_close()
+
+
+def call(url, path, body=None, headers=None):
+    """(status, headers, body bytes); a JSON body makes it a POST."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url + path, data=data, headers=headers or {}, method="POST" if data else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+# ---- the list, the click, the video ------------------------------------------------------------------------
+
+def test_list_click_and_video(monkeypatch, tmp_path):
+    s, done = site(monkeypatch, tmp_path)
+    s.refresh()
+    f = s.front("visitor-1")
+    assert [(e["title"], e["state"]) for e in f["events"]] == [(EVENT["title"], "ready")]
+    r = s.make(EID, "visitor-1")
+    assert r["ok"] and r["code"] == "making" and r["progress"] == f"/progress?event={EID}"
     assert done.wait(5) and wait_for(s, "done")
-    assert s.record(EVENT["id"])["video"]["duration_s"] == 60.0
-    again = s.make(EVENT["id"], "visitor-2")                  # one video per event
+    assert s.record(EID)["video"]["duration_s"] == 60.0
+    again = s.make(EID, "visitor-2")                          # one video per event
     assert not again["ok"] and again["code"] == "has_video"
+    for _ in range(2):                                        # the row stays "has a video" before the list's refresh
+        f = s.front("visitor-1")
+        assert f["events"][0]["state"] == "has_video" and f["events"][0]["video"] == EID
+    v = f["videos"][0]
+    assert v["id"] == EID and v["src"].startswith(f"/media/videos/{EID}/") and v["src"].endswith("/video.mp4")
+    assert v["receipts"] is False and v["sides"]["kind"] == "no real divide"     # no story files saved here
 
 
-def test_no_video_is_shown_with_its_reason(monkeypatch):
-    s, done = site(monkeypatch, outcome="no_video")
+def test_no_video_is_shown_with_its_reason(monkeypatch, tmp_path):
+    s, done = site(monkeypatch, tmp_path, outcome="no_video")
     s.refresh()
-    assert s.make(EVENT["id"], "visitor-1")["ok"]
+    assert s.make(EID, "visitor-1")["ok"]
     assert done.wait(5) and wait_for(s, "no_video")
-    assert "too few claims" in s.record(EVENT["id"])["why"]
+    assert "too few claims" in s.record(EID)["why"]
+    row = s.front("visitor-1")["events"][0]
+    assert row["state"] == "no_video" and "too few claims" in row["reason"]
 
 
-def test_unknown_event_is_refused(monkeypatch):
-    s, _ = site(monkeypatch)
+def test_unknown_event_is_refused(monkeypatch, tmp_path):
+    s, _ = site(monkeypatch, tmp_path)
     s.refresh()
     assert s.make("not-in-the-list", "visitor-1")["code"] == "unknown"
 
 
-def test_page_escapes_titles(monkeypatch):
-    s, _ = site(monkeypatch)
-    EVENT2 = dict(EVENT, id="00000000-0000-4000-8000-0000000000x2", title="<script>alert(1)</script> flood")
-    s.fetch = lambda: [EVENT2]
+def test_titles_reach_the_page_only_as_json(monkeypatch, tmp_path, serve):
+    """The pages are fixed files; titles come from /api/site and the page escapes them (esc in common.js)."""
+    s, _ = site(monkeypatch, tmp_path)
+    bad = dict(EVENT, id="00000000-0000-4000-8000-0000000000x2", title="<script>alert(1)</script> flood")
+    s.fetch = lambda: [bad]
     s.refresh()
-    assert "<script>alert(1)</script>" not in s.page()
+    url = serve(s)
+    for page in ("/", "/feed", "/progress", "/admin"):
+        code, h, body = call(url, page)
+        assert code == 200 and h["Content-Type"].startswith("text/html") and b"alert(1)" not in body, page
+    code, h, body = call(url, "/api/site")
+    assert code == 200 and h["Content-Type"].startswith("application/json")
+    assert json.loads(body)["events"][0]["title"] == bad["title"]
+    js = (server.STATIC / "feed" / "js" / "front.js").read_text(encoding="utf-8")
+    assert "esc(e.title)" in js
+
+
+def test_site_numbers_and_limits(monkeypatch, tmp_path):
+    s, _ = site(monkeypatch, tmp_path)
+    s.refresh()
+    n = s.front("visitor-1")["site"]
+    assert n["open"] and n["videosToday"] == 0 and n["youThisHour"] == 0 and n["reportsToday"] == 0
+    assert n["perPersonPerHour"] == s.gate.lim["per_visitor_per_hour"] and n["capPerVideo"] > 0
+    s.gate.set_mode("closed", by="jan")
+    assert s.front("visitor-1")["site"]["open"] is False
+    assert s.make(EID, "visitor-1")["code"] == "closed"
+
+
+# ---- reports ---------------------------------------------------------------------------------------------------
+
+def test_report_hides_the_video_and_has_a_daily_limit(monkeypatch, tmp_path):
+    s, _ = site(monkeypatch, tmp_path)
+    s.refresh()
+    assert s.report(EID, "viewer", "wrong_facts", "x")["ok"] is False        # nothing up to report yet
+    with_video(s)
+    r = s.report(EID, "viewer", "wrong_facts", "The date is wrong.")
+    assert r == {"ok": True, "code": "reported", "hidden": True, "message": "Thanks. We'll take a look."}
+    f = s.front("viewer")
+    assert f["videos"] == [] and f["site"]["reportsToday"] == 1
+    for _ in range(s.gate.rep["per_visitor_per_day"] - 1):
+        assert s.report(EID, "viewer", "other", "")["ok"]
+    out = s.report(EID, "viewer", "other", "")
+    assert out["ok"] is False and out["code"] == "report_limit"
+    assert s.report("../../slots", "viewer", "other", "")["ok"] is False      # not an event id
+
+
+def test_report_route(monkeypatch, tmp_path, serve):
+    s, _ = site(monkeypatch, tmp_path)
+    with_video(s)
+    url = serve(s)
+    code, h, body = call(url, "/report", {"event": EID, "reason": "one_sided", "note": "Only one side."})
+    assert code == 200 and json.loads(body)["code"] == "reported"
+    assert "stringer_visitor=" in h.get("Set-Cookie", "")                      # a new visitor gets its cookie
+    rep = s.gate.reports(EID)[0]
+    assert rep["reason"] == "one_sided" and rep["note"] == "Only one side."
+
+
+# ---- the admin side --------------------------------------------------------------------------------------------
+
+def test_admin_needs_the_token(monkeypatch, tmp_path, serve):
+    s, _ = site(monkeypatch, tmp_path)
+    url = serve(s)
+    assert call(url, "/admin/api")[0] == 503                                   # no token set up: closed
+    assert call(url, "/admin/api/pause", {})[0] == 503
+    s2, _ = site(monkeypatch, tmp_path, token=TOKEN)
+    url2 = serve(s2)
+    assert call(url2, "/admin/api")[0] == 401
+    assert call(url2, "/admin/api", headers={server.ADMIN_HEADER: "wrong"})[0] == 401
+    assert call(url2, "/admin/api/pause", {}, headers={server.ADMIN_HEADER: "wrong"})[0] == 401
+    assert s2.gate.mode == "open"
+    code, _, body = call(url2, "/admin/api", headers={server.ADMIN_HEADER: TOKEN})
+    d = json.loads(body)
+    assert code == 200 and {"site", "reports", "hidden", "log", "videos", "making", "spend", "steps"} <= set(d)
+    assert [x["key"] for x in d["steps"]] == P.KEYS
+
+
+def test_admin_actions(monkeypatch, tmp_path, serve):
+    s, _ = site(monkeypatch, tmp_path, token=TOKEN)
+    with_video(s)
+    url = serve(s)
+    act = lambda a, b: json.loads(call(url, f"/admin/api/{a}", b, headers={server.ADMIN_HEADER: TOKEN})[2])
+    assert act("take_down", {"event": EID, "note": "checking a fact"})["record"]["hidden"] is True
+    assert s.front("v")["videos"] == []
+    out = act("restore", {"event": EID, "keep_up": True})
+    assert out["record"] == {"hidden": False, "keep_up": True, "state": "done"}
+    assert s.report(EID, "viewer", "other", "")["hidden"] is False            # kept up: reports don't hide it
+    assert [v["id"] for v in s.front("v")["videos"]] == [EID]
+    assert act("remake", {"event": EID, "note": " "})["ok"] is False          # a remake needs a note
+    out = act("remake", {"event": EID, "note": "The script misread the date."})
+    assert out["ok"] and out["record"] == {"hidden": False, "keep_up": False, "state": None}
+    d = s.admin()
+    assert {v["id"]: v for v in d["videos"]}[EID]["status"] == "remake"       # the old video stays on the desk
+    assert s.make(EID, "visitor-1")["ok"]                                     # it can be made again
+    assert act("pause", {"note": "a break"})["mode"] == "closed" and s.gate.mode == "closed"
+    assert act("open", {})["mode"] == "open"
+    assert act("nonsense", {"event": EID})["ok"] is False
+    assert act("take_down", {})["ok"] is False                                 # no event id
+    kinds = [e["kind"] for e in s.gate.log()]
+    assert {"taken_down", "restored", "remake", "paused", "opened"} <= set(kinds)
+    assert s.admin()["site"]["modeBy"] == "admin"
+
+
+# ---- hidden videos aren't served, except to the review desk -----------------------------------------------------
+
+def test_media_of_a_hidden_video_needs_the_admin_pass(monkeypatch, tmp_path, serve):
+    s, _ = site(monkeypatch, tmp_path, token=TOKEN)
+    tid = with_video(s)
+    vid = tmp_path / "stories" / EID / "video"
+    vid.mkdir(parents=True)
+    (vid / "poster.jpg").write_bytes(b"made-up poster")
+    url = serve(s)
+    path = f"/media/videos/{EID}/{tid}/poster.jpg"
+    assert call(url, path)[2] == b"made-up poster"
+    s.gate.take_down(EID, by="jan")
+    assert call(url, path)[0] == 404
+    signed = s.admin_link(path)
+    assert signed.startswith(path + "?exp=") and call(url, signed)[2] == b"made-up poster"
+    assert call(url, signed[:-1] + ("0" if signed[-1] != "0" else "1"))[0] == 404     # a changed pass fails
+    expired = int(time.time()) - 5
+    assert call(url, f"{path}?exp={expired}&k={s.media_pass(path[7:], expired)}")[0] == 404
+    hidden = {v["id"]: v for v in s.admin()["videos"]}[EID]
+    assert "?exp=" in hidden["poster"]                                          # the desk's links carry the pass
 
 
 def test_media_names():
@@ -83,6 +258,81 @@ def test_media_names():
                 "videos/x/y/../video.mp4x", "videos/x y/z/video.mp4", "gate/slots.json"):
         assert not server.MEDIA.fullmatch(bad), bad
 
+
+# ---- live progress ---------------------------------------------------------------------------------------------
+
+def test_progress_of_a_running_video(monkeypatch, tmp_path, serve):
+    s, _ = site(monkeypatch, tmp_path)
+    s.refresh()
+    t = s.gate.start(EVENT, "visitor-1").ticket
+    s.refresh()                                             # started elsewhere: the list says "being made"
+    p = P.Progress(s.gate.store, EID, t.id, title=EVENT["title"], say=lambda *_: None)
+    p.end("sides", {"seconds": 1.5, "usd": 0.0002, "kind": "two sides"})
+    p.begin("gather")
+    v = s.progress(EID, "visitor-1")
+    assert v["live"] and v["by"] == "you" and v["current"] == "gather"
+    st = {x["key"]: x["status"] for x in v["steps"]}
+    assert st["sides"] == "done" and st["gather"] == "running" and st["video"] == "waiting"
+    assert s.progress(EID, "visitor-2")["by"] == "another student"
+    row = s.front("visitor-1")["events"][0]
+    assert row["state"] == "making" and row["progress"]["step"] == "gather" and row["progress"]["by"] == "you"
+    url = serve(s)
+    code, _, body = call(url, f"/api/progress?event={EID}")
+    assert code == 200 and json.loads(body)["live"] is True
+    assert call(url, "/api/progress?event=00000000-0000-4000-8000-00000000none")[0] == 404
+    assert call(url, "/api/progress?event=../../slots")[0] == 404
+    p.finish("no_video", "script: too few claims", seconds=40.0, usd=0.2)
+    t.finish(no_video="script: too few claims")
+    v = s.progress(EID, "visitor-1")
+    assert not v["live"] and v["outcome"] == "no_video" and "too few claims" in v["why"]
+    assert {x["key"]: x["status"] for x in v["steps"]}["gather"] == "stopped"
+
+
+def test_a_run_that_stopped_without_saying_so_shows_as_failed(monkeypatch, tmp_path):
+    s, _ = site(monkeypatch, tmp_path)
+    t = s.gate.start(EVENT, "visitor-1").ticket
+    p = P.Progress(s.gate.store, EID, t.id, say=lambda *_: None)
+    p.begin("story_file")                                   # the machine died here
+    t.finish(error="RuntimeError('lost')")
+    v = s.progress(EID, "visitor-1")
+    assert v["live"] is False and v["state"] == "failed" and "stopped" in v["why"]
+
+
+# ---- static files ----------------------------------------------------------------------------------------------
+
+def test_static_files_are_gzipped_cached_and_safe(monkeypatch, tmp_path, serve):
+    s, _ = site(monkeypatch, tmp_path)
+    url = serve(s)
+    code, h, body = call(url, "/static/feed/js/front.js", headers={"Accept-Encoding": "gzip"})
+    assert code == 200 and h["Content-Encoding"] == "gzip" and h["Content-Type"].startswith("text/javascript")
+    assert b"STRINGER_GET" in gzip.decompress(body)
+    assert call(url, "/static/feed/js/front.js", headers={"If-None-Match": h["ETag"]})[0] == 304
+    for bad in ("/static/../server.py", "/static/feed/../../server.py", "/static/%2e%2e/server.py",
+                "/static/feed/js/nothing.js"):
+        assert call(url, bad)[0] == 404, bad
+    assert call(url, "/favicon.ico")[0] == 204
+    assert call(url, "/front.html")[0] == 200                               # old names go to the new ones
+
+
+def test_static_file_is_read_again_when_it_changes(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "STATIC", tmp_path)
+    f = tmp_path / "made-up.js"
+    f.write_text("one")
+    assert server.static_file("made-up.js")[0] == b"one"
+    f.write_text("two")
+    st = f.stat()
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    assert server.static_file("made-up.js")[0] == b"two"
+
+
+def test_no_video_frames_in_the_repo():
+    """The designs' media/ folders hold frames from real videos; only code and fonts were copied."""
+    files = [p for p in server.STATIC.rglob("*") if p.is_file()]
+    assert files and not [p for p in files if "media" in p.relative_to(server.STATIC).parts]
+    assert not [p for p in files if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm", ".gif")]
+
+
+# ---- the Cloud Run job's uploads ---------------------------------------------------------------------------------
 
 def test_job_records_site_paths(monkeypatch, tmp_path):
     from scripts import run_job
@@ -96,8 +346,34 @@ def test_job_records_site_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("STRINGER_PRIVATE_BUCKET", "priv")
     monkeypatch.setattr(run_job.cloud, "upload", lambda b, n, p, **kw: sent.append((b, n)) or "")
     rec = {"video": {"mp4": str(out / "video.mp4"), "duration_s": 60.0}, "seconds": 200.0, "usd": 0.5}
-    v = run_job.upload_outputs(tmp_path, rec, EVENT["id"], "T1")
-    assert v["url"] == f"/media/videos/{EVENT['id']}/T1/video.mp4" and server.MEDIA.fullmatch(v["url"][7:])
+    v = run_job.upload_outputs(tmp_path, rec, EID, "T1")
+    assert v["url"] == f"/media/videos/{EID}/T1/video.mp4" and server.MEDIA.fullmatch(v["url"][7:])
     assert v["poster"].endswith("/poster.jpg") and v["captions"] is None
-    assert ("priv", f"stories/{EVENT['id']}/T1/script.json") in sent
+    assert ("priv", f"stories/{EID}/T1/script.json") in sent
     assert all(b == "vids" for b, n in sent if n.startswith("videos/"))
+
+
+def test_job_uploads_the_story_files_of_a_run_with_no_video(monkeypatch, tmp_path):
+    """So the site's "See what happened" can show the run: pipeline.json and the step files, no articles."""
+    from scripts import run_job
+    g = Gate(MemoryStore(), complete=None, model="", tavily_left=lambda: 500)
+    t = g.start(EVENT, "visitor-1").ticket
+    g.store.update(f"raw_events/{EID}.json", lambda cur: (EVENT, None))
+    monkeypatch.setattr(run_job, "Gate", lambda: g)
+    monkeypatch.setenv("STRINGER_WORK", str(tmp_path))
+    monkeypatch.setenv("STRINGER_PRIVATE_BUCKET", "priv")
+    sent = []
+    monkeypatch.setattr(run_job.cloud, "upload", lambda b, n, p, **kw: sent.append((b, n)) or "")
+
+    def fake_run(raw, ticket, stories_dir, raw_dir):
+        d = stories_dir / raw["id"]
+        d.mkdir(parents=True)
+        for f in ("pipeline.json", "gather.json", "articles.jsonl"):
+            (d / f).write_text("{}")
+        return {"outcome": "no_video", "why": "script: too few claims"}
+    monkeypatch.setattr(run_job.pipeline, "run", fake_run)
+    assert run_job.main([EID]) == 0
+    names = {n for b, n in sent if b == "priv"}
+    assert names == {f"stories/{EID}/{t.id}/pipeline.json", f"stories/{EID}/{t.id}/gather.json"}
+    rec, _ = g.store.get(f"events/{EID}.json")
+    assert rec["state"] == "no_video" and "too few claims" in rec["no_video_reason"]

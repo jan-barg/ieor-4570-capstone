@@ -1,55 +1,102 @@
-"""Stringer's test website: list the events the Gate allows, press "Make video", watch it arrive.
+"""Stringer's website (module 9, Nov 27): the four pages Jan picked, on the Gate's records and each run's files.
 
-For testing the deploy only (Jan, Nov 27); the real front page (module 9) replaces it. Standard
-library only. Routes:
-    GET  /                 the list (refreshed from the live feed every few minutes)
-    POST /make?event=<id>  the click: the Gate decides; on go, the event is saved and the job starts
-    GET  /status?event=<id>  the event's record: making, done (with the video) or no video
+Standard library only. Pages (from stringer_private/frontend_designs; the look gets tweaked later):
+    GET  /                    the landing page: how a video is made, one map (direction 3, the atlas)
+    GET  /feed                the front page: finished videos, down for the next story; the events (direction 2)
+    GET  /progress?event=<id> one video being made, agent by agent, live (or how a finished run went)
+    GET  /admin               the review desk: reports, hidden videos, the log, money (needs GATE_ADMIN_TOKEN)
+JSON the pages read (the shapes of the designs' window.STRINGER_DEMO and window.STRINGER_RUN; web/data.py):
+    GET  /api/site            the site's numbers, the 8 steps, finished videos with their receipts, the events
+    GET  /api/progress?event=<id>   one run; the page asks every 2 to 3 seconds while it runs
+    GET  /api/receipts?event=<id>   what one video was made from (no article text)
+    POST /make?event=<id>     the click: the Gate decides; on go, the event is saved and the job starts
+    POST /report              {"event", "reason", "note"}: the Report link; the first report hides the video
+    GET  /admin/api           everything the desk shows      } both need the header X-Admin-Token:
+    POST /admin/api/<action>  take_down, restore, remake,    } <GATE_ADMIN_TOKEN>
+                              pause, open ({"event", "note", "keep_up"})
+    GET  /status?event=<id>   one event's record (the deploy test page's poll; kept)
     GET  /media/videos/<event>/<ticket>/<file>   a finished video, poster or captions, streamed from the
-                           private video bucket (with Range, so the player can seek)
-    GET  /healthz          "ok"
+                              private video bucket (with Range, so the player can seek); on the Mac, from the
+                              run's own folder
+    GET  /static/...          the pages' code, styles and fonts (gzipped when the browser takes it)
+    GET  /healthz             "ok"
 
 On Cloud Run the site sits behind Identity-Aware Proxy: only signed-in Columbia accounts get in (Jan,
 Nov 27), and the account IAP names is the visitor for the Gate's per-visitor limits (a cookie otherwise).
+STRINGER_JOB names the Cloud Run job that makes a video (scripts/run_job.py). Without it, the video is made
+in this process, on a thread.
 
-On Cloud Run STRINGER_JOB names the job that makes a video (scripts/run_job.py). Without it, the
-video is made in this process, on a thread (for a local try: python -m web.server --port 8080)."""
+On the Mac:  python -m web.server --port 8080            (the live feed and the local Gate store)
+             python -m web.server --feed events.json --no-model    (a saved feed, keyword content rule)"""
 from __future__ import annotations
 
 import argparse
+import datetime as dt
+import gzip
+import hashlib
+import hmac
 import html
 import json
+import mimetypes
 import os
 import re
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from stringer import cloud, feed, pipeline
-from stringer.gate import Gate, TooCostly
+from stringer import cloud, feed, paths, pipeline
+from stringer import progress as prog
+from stringer.gate import MESSAGES, Gate, TooCostly
 from stringer.gate.core import safe_id
 
+from . import data as D
+from . import geo
+
 REFRESH_S = 300
+MEDIA_PASS_S = 3600              # how long a hidden video's link on the review desk works
 RETRY_S = 60
 COOKIE = "stringer_visitor"
 IAP_USER = "X-Goog-Authenticated-User-Id"
+IAP_EMAIL = "X-Goog-Authenticated-User-Email"
+IAP_SIGN_OUT = "/_gcp_iap/clear_login_cookie"
+ADMIN_HEADER = "X-Admin-Token"
 MEDIA = re.compile(r"videos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(video\.mp4|poster\.jpg|captions\.vtt|captions\.srt)")
+WEB = Path(__file__).resolve().parent
+STATIC = WEB / "static"
+FONTS = paths.CODE / "render" / "public" / "fonts"
+PAGES = {"/": "atlas/landing.html", "/feed": "feed/front.html", "/progress": "feed/progress.html",
+         "/admin": "feed/admin.html"}
+TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8",
+         ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8", ".json": "application/json",
+         ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg"}
+SAFE_PATH = re.compile(r"[A-Za-z0-9_./-]+")
 
 
 class Site:
-    def __init__(self, gate: Gate | None = None, fetch=feed.fetch):
+    def __init__(self, gate: Gate | None = None, fetch=feed.fetch, files: D.Files | None = None,
+                 admin_token: str | None = None):
         self.gate = gate or Gate()
         self.fetch = fetch
+        self.files = files or D.Files(os.environ.get("STRINGER_PRIVATE_BUCKET") or None)
+        self.admin_token = admin_token if admin_token is not None else os.environ.get("GATE_ADMIN_TOKEN", "")
         self.events: dict[str, dict] = {}
         self.listings: list = []
+        self.records: dict[str, dict] = {}          # every event the Gate has a record of (for finished videos)
         self.updated = 0.0
         self.error = ""
         self.tried = 0.0
         self.lock = threading.Lock()
         self.refreshing = threading.Lock()
+        self._receipts: dict = {}
+        self._runs: dict = {}                       # finished runs' progress views never change
+        self._geo: tuple[bytes, bytes] | None = None
+        self._geo_lock = threading.Lock()
 
+    # ---- the list, refreshed from the feed every few minutes ---------------------------------------------
     def refresh(self) -> None:
         try:
             events = self.fetch()
@@ -59,6 +106,18 @@ class Site:
                 self.listings, self.updated, self.error = listings, time.time(), ""
         except Exception as e:                       # keep the last good list
             self.error = repr(e)[:300]
+        self.load_records()
+
+    def load_records(self) -> None:
+        """Every event record in the store, read side by side (the finished videos live here)."""
+        try:
+            keys = self.gate.store.list("events/")
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                recs = list(ex.map(lambda k: self.gate.store.get(k)[0], keys))
+            with self.lock:
+                self.records = {str(r.get("id")): r for r in recs if r and r.get("id")}
+        except Exception as e:
+            self.error = self.error or repr(e)[:300]
 
     def fresh(self) -> None:
         """Refreshes the list when it is older than REFRESH_S (after a failure, at most once a minute).
@@ -79,11 +138,19 @@ class Site:
             self.fresh()
             time.sleep(RETRY_S)
 
-    def record(self, event_id: str) -> dict:
+    def get_record(self, event_id: str) -> dict:
         rec, _ = self.gate.store.get(f"events/{safe_id(event_id)}.json")
-        rec = rec or {}
-        return {"state": rec.get("state"), "video": rec.get("video"), "why": rec.get("no_video_reason")}
+        if rec:
+            with self.lock:
+                self.records[str(rec.get("id") or event_id)] = rec
+        return rec or {}
 
+    def record(self, event_id: str) -> dict:
+        rec = self.get_record(event_id)
+        return {"state": rec.get("state"), "video": self.video_urls(event_id, rec), "why": rec.get("no_video_reason"),
+                "hidden": bool(rec.get("hidden"))}
+
+    # ---- the click -----------------------------------------------------------------------------------------
     def make(self, event_id: str, visitor: str) -> dict:
         with self.lock:
             raw = self.events.get(event_id)
@@ -91,14 +158,17 @@ class Site:
             return {"ok": False, "code": "unknown", "message": "That event isn't in the list any more."}
         d = self.gate.start(raw, visitor)
         if not d.ok:
-            return {"ok": False, "code": d.code, "message": d.message, "video": d.video}
+            return {"ok": False, "code": d.code, "message": d.message, "video": d.video,
+                    "retry_after_s": d.retry_after_s}
         self.gate.store.update(f"raw_events/{safe_id(event_id)}.json", lambda cur: (raw, None))
         if os.environ.get("STRINGER_JOB"):
             cloud.start_job(cloud.setting("STRINGER_PROJECT"), cloud.setting("STRINGER_REGION", "us-east1"),
                             cloud.setting("STRINGER_JOB"), [event_id])
         else:
             threading.Thread(target=self._make_here, args=(raw, d.ticket), daemon=True).start()
-        return {"ok": True, "code": "making", "message": "Making the video. This takes a few minutes."}
+        self.get_record(event_id)
+        return {"ok": True, "code": "making", "message": "Making the video. This takes a few minutes.",
+                "ticket": d.ticket.id, "progress": f"/progress?event={event_id}"}
 
     def _make_here(self, raw: dict, ticket) -> None:
         try:
@@ -114,58 +184,464 @@ class Site:
         else:
             ticket.finish(no_video=rec["why"])
 
-    def page(self) -> str:
+    # ---- the report link -----------------------------------------------------------------------------------
+    def report(self, event_id: str, visitor: str, reason: str, note: str) -> dict:
+        try:
+            eid = safe_id(event_id)
+        except ValueError:
+            return {"ok": False, "message": "That video isn't here any more."}
+        rec = self.get_record(eid)
+        if rec.get("state") != "done":
+            return {"ok": False, "message": "You can report a video once it's up."}
+        out = self.gate.report(eid, visitor, reason, note)
+        self.get_record(eid)
+        return out
+
+    # ---- the pieces the pages show -------------------------------------------------------------------------
+    def video_urls(self, eid: str, rec: dict) -> dict | None:
+        """The video's addresses on this site. Runs made on the Mac saved file paths, so they get the same
+        /media/... addresses, which the Mac's /media serves from the run's folder."""
+        v = rec.get("video") if rec else None
+        if not v:
+            return None
+        out = {"src": v.get("url"), "poster": v.get("poster") if str(v.get("poster") or "").startswith("/media/") else None,
+               "captions": v.get("captions"), "duration_s": v.get("duration_s")}
+        if not out["src"]:
+            tid = D.last_ticket(rec, ("done",)) or "local"
+            base = f"/media/videos/{safe_id(eid)}/{safe_id(tid)}"
+            out.update(src=f"{base}/video.mp4", poster=f"{base}/poster.jpg")
+        elif not out["poster"]:
+            out["poster"] = out["src"].rsplit("/", 1)[0] + "/poster.jpg"
+        return out
+
+    def receipts(self, eid: str, rec: dict | None = None) -> dict | None:
+        rec = rec if rec is not None else self.get_record(eid)
+        tid = D.last_ticket(rec, ("done",))
+        k = (eid, tid)
+        if k not in self._receipts:
+            r = D.receipts(self.files, eid, tid)
+            if r is None:
+                return None                          # not cached: the files may land later
+            self._receipts[k] = r
+        return self._receipts[k]
+
+    def raw_event(self, eid: str) -> dict:
+        with self.lock:
+            e = self.events.get(eid)
+        if e:
+            return e
+        try:
+            r, _ = self.gate.store.get(f"raw_events/{safe_id(eid)}.json")
+        except Exception:
+            r = None
+        return r or {}
+
+    def video_row(self, eid: str, rec: dict, now: dt.datetime) -> dict | None:
+        """One finished video, as the front page's videos[] (content.js's shape)."""
+        urls = self.video_urls(eid, rec)
+        if not urls:
+            return None
+        rc = self.receipts(eid, rec) or {}
+        ev = dict(rc.get("event") or {})
+        raw = self.raw_event(eid)
+        for k_raw, k in (("category", "category"), ("subtype", "subtype"), ("country", "country"),
+                         ("region", "region"), ("location_name", "place"), ("url", "url"), ("title", "title")):
+            if raw.get(k_raw) and not ev.get(k):
+                ev[k] = raw[k_raw]
+        v = rec.get("video") or {}
+        made = v.get("made_at")
+        secs = v.get("seconds")
+        return {
+            "id": eid, "event": eid, "chain": eid, "part": 1, "of": 1,
+            "headline": rc.get("title") or rec.get("title") or ev.get("title") or "",
+            "eventTitle": rec.get("title") or ev.get("title") or "", "dek": rc.get("dek") or "",
+            "category": ev.get("category") or "", "subtype": ev.get("subtype") or "", "country": ev.get("country") or "",
+            "region": ev.get("region") or "", "place": ev.get("place") or ev.get("country") or "",
+            "lat": ev.get("lat"), "lng": ev.get("lng"), "url": ev.get("url"),
+            "confidence": ev.get("confidence") or D.confidence_word(raw.get("confidence")),
+            "sides": rc.get("sides") or {"kind": "no real divide", "reason": "The receipts for this video aren't saved."},
+            "articles": rc.get("articles") or 0, "outlets": rc.get("outlets") or 0,
+            "claims": rc.get("claims") or 0, "claimsBacked": rc.get("claimsBacked") or 0,
+            "confirmed": rc.get("confirmed"), "sayWho": rc.get("sayWho"), "dropped": rc.get("dropped"),
+            "elsewhere": rc.get("elsewhere"), "outletList": rc.get("outletList") or [], "aiMark": rc.get("aiMark"),
+            "receipts": bool(rc),
+            "made": made, "minutes": round(float(secs) / 60, 1) if secs else None, "cost": v.get("usd"),
+            "duration": D.clip_length(urls.get("duration_s")), "src": urls["src"], "poster": urls["poster"],
+            "captions": urls.get("captions"), "reported": bool(rec.get("reports")), "keptUp": bool(rec.get("keep_up")),
+            "hidden": bool(rec.get("hidden")),
+        }
+
+    def visitor_user(self, visitor: str, email: str | None) -> dict:
+        if email:
+            local = email.split("@", 1)[0]
+            letters = re.sub(r"[^A-Za-z]", "", local)[:2].upper() or local[:2].upper()
+            return {"name": local, "email": email, "initials": letters, "iap": True, "signOut": IAP_SIGN_OUT,
+                    "school": "Columbia University"}
+        return {"name": "You", "email": "", "initials": "", "iap": False, "signOut": None, "school": ""}
+
+    def progress_doc(self, eid: str, rec: dict) -> tuple[dict | None, str | None]:
+        tid = D.last_ticket(rec)
+        if not tid:
+            return None, None
+        running = rec.get("state") == "making" and (rec.get("ticket") or {}).get("id") == tid
+        if not running and (eid, tid) in self._runs:
+            return self._runs[(eid, tid)], tid
+        doc, _ = self.gate.store.get(prog.key_for(eid, tid))
+        if doc is None and not running:
+            pl = self.files.read(eid, tid, "pipeline.json")
+            if pl:
+                doc = D.from_pipeline(pl, self.files.reader(eid, tid), tid)
+        if doc is None and running:
+            t = rec.get("ticket") or {}
+            doc = {"version": prog.VERSION, "event": eid, "ticket": tid, "title": rec.get("title"),
+                   "started": t.get("started"), "state": "running", "current": None, "steps": {}, "calls": [],
+                   "searches": [], "usd": t.get("spent") or 0.0, "model_calls": 0}
+        if doc is not None and not running and doc.get("state") != "running":
+            self._runs[(eid, tid)] = doc
+        if doc is not None and not running and doc.get("state") == "running":
+            # the run ended without saying so (a crash): show it as stopped
+            doc = dict(doc, state="failed" if rec.get("state") != "no_video" else "no_video",
+                       why=rec.get("no_video_reason") or doc.get("why") or "The run stopped without finishing.")
+        return doc, tid
+
+    def event_meta(self, eid: str, rec: dict) -> dict:
+        raw = self.raw_event(eid)
+        rc = self.receipts(eid, rec) or {}
+        ev = rc.get("event") or {}
+        return {"id": eid, "title": rec.get("title") or raw.get("title") or ev.get("title"),
+                "category": raw.get("category") or ev.get("category"), "subtype": raw.get("subtype") or ev.get("subtype"),
+                "country": raw.get("country") or ev.get("country"), "url": raw.get("url") or ev.get("url"),
+                "confidence": D.confidence_word(raw.get("confidence")) or ev.get("confidence")}
+
+    def progress(self, eid: str, visitor: str) -> dict | None:
+        rec = self.get_record(eid)
+        if not rec:
+            return None
+        doc, tid = self.progress_doc(eid, rec)
+        if doc is None:
+            return None
+        t = rec.get("ticket") or {}
+        by = None
+        if rec.get("state") == "making" and t.get("visitor"):
+            by = "you" if t["visitor"] == self.gate.visitor_key(visitor) else "another student"
+        video = self.video_urls(eid, rec) if rec.get("state") == "done" and not rec.get("hidden") else None
+        st = self.gate.status()
+        out = D.run_view(doc, by=by, event=self.event_meta(eid, rec), video=video, estimate_usd=st["estimate_usd"],
+                         cap_usd=float(self.gate.lim["max_video_usd"]))
+        out["record_state"] = "hidden" if rec.get("hidden") else rec.get("state")
+        out["no_video_reason"] = rec.get("no_video_reason")
+        return out
+
+    def site_numbers(self, visitor: str) -> dict:
+        st = self.gate.status()
+        vs = self.gate.visitor_status(visitor)
+        return {"open": st["mode"] == "open", "mode": st["mode"], "videosToday": st["videos_today"],
+                "videosPerDay": st["videos_per_day"], "beingMade": st["being_made"], "atOnce": st["at_once"],
+                "youThisHour": vs["this_hour"], "perPersonPerHour": vs["per_hour"],
+                "retryAfterS": vs["retry_after_s"], "reportsToday": vs["reports_today"],
+                "reportsPerDay": vs["reports_per_day"], "searchesLow": st["searches_low"],
+                "estimatePerVideo": round(float(st["estimate_usd"]), 2), "capPerVideo": float(self.gate.lim["max_video_usd"]),
+                "minutesPerVideo": D.MINUTES_PER_VIDEO}
+
+    def row_state(self, rec: dict, listed: str) -> str:
+        """An event row's state from its record: a video that finished, failed or was hidden since the list
+        was made shows so at once (the list alone would say "ready" until its next refresh)."""
+        if rec.get("hidden"):
+            return "hidden"
+        st = rec.get("state")
+        if st == "done":
+            return "has_video"
+        if st == "no_video":
+            return "no_video"
+        if st == "making":
+            return "making" if self.gate._fresh(rec.get("ticket")) else "ready"
+        return "ready" if listed in ("making", "has_video") else listed
+
+    def front(self, visitor: str, email: str | None = None) -> dict:
+        """The front page's data: window.STRINGER_DEMO's shape, on real records."""
+        now = dt.datetime.now(dt.timezone.utc)
         with self.lock:
             rows, updated, err = list(self.listings), self.updated, self.error
-        st = self.gate.status()
-        items = []
+            records = dict(self.records)
+        vkey = self.gate.visitor_key(visitor)
+        events = []
         for li in rows:
-            e, eid = li.event, html.escape(str(li.event["id"]))
-            title = html.escape(str(e.get("title") or ""))
-            meta = html.escape(f"{e.get('category')} · severity {e.get('severity')} · {e.get('report_count')} reports")
-            items.append(f'<li data-id="{eid}" data-state="{html.escape(li.state)}"><div class="t">{title}</div>'
-                         f'<div class="m">{meta}</div><div class="a"></div></li>')
-        when = time.strftime("%H:%M UTC", time.gmtime(updated)) if updated else "not yet"
-        return PAGE.format(items="\n".join(items) or "<li>No events yet. The list loads in a minute.</li>",
-                           when=when, err=html.escape(err), today=st["videos_today"], per_day=st["videos_per_day"])
+            e = li.event
+            eid = str(e.get("id"))
+            state = li.state
+            rec = records.get(eid) or {}
+            if state == "making" or rec.get("state") == "making":
+                rec = self.get_record(eid)
+            if rec:                                  # the record is newer than the list (made every 5 minutes)
+                state = self.row_state(rec, state)
+            row = {"id": eid, "title": e.get("title") or "", "category": e.get("category") or "",
+                   "subtype": e.get("subtype") or "", "country": e.get("country") or "", "region": e.get("region") or "",
+                   "severity": D.num(e.get("severity")), "confidence": D.confidence_word(e.get("confidence")),
+                   "reports": int(D.num(e.get("report_count")) or 0),
+                   "lastReport": D.ago(D.parse(e.get("updated_at") or e.get("last_reported_at") or e.get("created_at")), now),
+                   "url": e.get("url"), "state": state}
+            if state == "has_video":
+                row["video"] = eid
+            if state == "no_video":
+                row["reason"] = rec.get("no_video_reason") or ""
+            if state == "making":
+                t = rec.get("ticket") or {}
+                doc = None
+                if t.get("id"):
+                    try:
+                        doc, _ = self.gate.store.get(prog.key_for(eid, t["id"]))
+                    except Exception:
+                        doc = None
+                step, pct = D.progress_pct(doc, now)
+                started = D.parse(t.get("started"))
+                row["progress"] = {"step": step or "sides", "pct": pct, "ticket": t.get("id"),
+                                   "startedAgo": D.ago(started, now).replace(" ago", "") if started else "",
+                                   "started": t.get("started"), "by": "you" if t.get("visitor") == vkey else "another student"}
+            events.append(row)
+        videos = []
+        for eid, rec in records.items():
+            if rec.get("state") == "done" and rec.get("video") and not rec.get("hidden"):
+                v = self.video_row(eid, rec, now)
+                if v:
+                    videos.append(v)
+        videos.sort(key=lambda v: v.get("made") or "", reverse=True)       # newest first (hot ranking: later)
+        msgs = dict(MESSAGES, unavailable=MESSAGES["no_video"], report_thanks="Thanks. We'll take a look.")
+        lim = self.gate.lim
+        msgs.update(day_full=MESSAGES["day_full"].format(n=lim["videos_per_day"]),
+                    busy=MESSAGES["busy"].format(n=lim["at_once"]))
+        return {
+            "now": D.iso(now), "user": self.visitor_user(visitor, email), "credit": D.CREDIT,
+            "site": self.site_numbers(visitor), "steps": D.steps_list(), "gateMessages": msgs,
+            "reportReasons": [{"key": k, "label": D.REASON_LABELS.get(k, k)} for k in self.gate.rep["reasons"]],
+            "videos": videos, "chains": {}, "events": events,
+            "listUpdated": D.iso(dt.datetime.fromtimestamp(updated, dt.timezone.utc)) if updated else None,
+            "listError": bool(err),
+        }
+
+    # ---- the admin side -----------------------------------------------------------------------------------
+    # a hidden video isn't served, except to the review desk: its links there carry a pass that ends in an hour
+    def media_pass(self, name: str, exp: int) -> str:
+        return hmac.new(self.admin_token.encode(), f"{name}|{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+    def admin_link(self, url: str | None) -> str | None:
+        if not url or not url.startswith("/media/") or not self.admin_token:
+            return url
+        exp = int(time.time()) + MEDIA_PASS_S
+        return f"{url}?exp={exp}&k={self.media_pass(url[len('/media/'):], exp)}"
+
+    def media_pass_ok(self, name: str, q: dict) -> bool:
+        try:
+            exp = int((q.get("exp") or ["0"])[0])
+        except ValueError:
+            return False
+        k = (q.get("k") or [""])[0]
+        return bool(self.admin_token) and exp >= time.time() and hmac.compare_digest(k, self.media_pass(name, exp))
+
+    def admin_ok(self, token: str | None) -> bool:
+        return bool(self.admin_token) and hmac.compare_digest(str(token or ""), self.admin_token)
+
+    def admin(self) -> dict:
+        """The review desk's data: reports, hidden videos, the log (3 days), money (7 days), every video."""
+        g = self.gate
+        now = dt.datetime.now(dt.timezone.utc)
+        self.load_records()
+        with self.lock:
+            records = dict(self.records)
+        title = lambda eid: (records.get(eid) or {}).get("title") or ""
+        st = g.status()
+        days = [g.day(now - dt.timedelta(days=i)) for i in range(7)]
+
+        def get_many(keys):
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                return [x for x in ex.map(lambda k: g.store.get(k)[0], keys) if x]
+        reports = get_many(g.store.list("reports/"))
+        reports.sort(key=lambda r: r.get("at") or "", reverse=True)
+
+        def report_status(rec):
+            if rec.get("hidden"):
+                return "hidden, waiting for you" if rec.get("hidden_by") == "reports" else f"taken down by {rec.get('hidden_by')}"
+            if rec.get("keep_up"):
+                return "restored, marked to stay up"
+            return "restored" if not rec.get("reports_since_review") else "open"
+        out_reports = [{"id": r.get("id"), "video": r.get("event"), "headline": title(r.get("event")),
+                        "reason": r.get("reason"), "note": r.get("note") or "", "at": r.get("at"),
+                        "visitor": "visitor " + str(r.get("visitor") or "")[:4],
+                        "status": report_status(records.get(r.get("event")) or {})} for r in reports]
+        log_keys = []
+        for day in days[:3]:
+            log_keys += g.store.list(f"log/{day}/")
+        log = get_many(log_keys)
+        log.sort(key=lambda x: x.get("at") or "", reverse=True)
+
+        def who(x):
+            k = x.get("kind")
+            if k in ("start", "report"):
+                return "visitor " + str(x.get("visitor") or "")[:4]
+            if k.startswith("video_"):
+                return "pipeline"
+            if k == "hidden" and x.get("by") == "reports":
+                return "first report"
+            return x.get("by") or "gate"
+
+        def detail(x):
+            k = x.get("kind")
+            if k == "start":
+                return f"estimate ${float(x.get('estimate_usd') or 0):.2f}"
+            if k.startswith("video_"):
+                bits = [f"${float(x.get('spent_usd') or 0):.2f} spent"]
+                if x.get("reason"):
+                    bits.insert(0, D.cut(x["reason"], 140))
+                return " · ".join(bits)
+            if k == "report":
+                return D.REASON_LABELS.get(x.get("reason"), x.get("reason") or "").lower()
+            return D.cut(x.get("note") or "", 200)
+        out_log = [{"at": x.get("at"), "kind": x.get("kind"), "event": x.get("event"),
+                    "what": title(x.get("event")) or {"paused": "New videos paused", "opened": "New videos open again"}.get(
+                        x.get("kind"), ""), "who": who(x), "detail": detail(x)} for x in log]
+        ledgers = {d: (g.store.get(f"days/{d}.json")[0] or {}) for d in days}
+        per_step: dict = {}
+        for v in (ledgers[days[0]].get("videos") or []):
+            for k, u in (v.get("parts") or {}).items():
+                per_step[k] = round(per_step.get(k, 0.0) + float(u or 0), 6)
+        making = [r for r in records.values() if r.get("state") == "making"]
+        making_rows = []
+        for r in making:
+            t = r.get("ticket") or {}
+            doc = None
+            if t.get("id"):
+                try:
+                    doc, _ = g.store.get(prog.key_for(str(r.get("id")), t["id"]))
+                except Exception:
+                    doc = None
+            step, pct = D.progress_pct(doc, now)
+            making_rows.append({"id": r.get("id"), "title": r.get("title") or "", "step": step, "pct": pct,
+                                "started": t.get("started"), "spent": t.get("spent"),
+                                "by": "visitor " + str(t.get("visitor") or "")[:4]})
+        videos = []
+        for eid, rec in records.items():
+            last = (rec.get("history") or [{}])[-1] or {}
+            remade = not rec.get("video") and rec.get("state") in (None, "ready") \
+                and str(last.get("outcome") or "").startswith("reset for a remake")
+            if not rec.get("video") and not rec.get("hidden") and rec.get("state") not in ("no_video",) and not remade:
+                continue
+            urls = self.video_urls(eid, dict(rec, video=last.get("video")) if remade else rec) or {}
+            if rec.get("hidden") or remade:
+                urls = dict(urls, src=self.admin_link(urls.get("src")), poster=self.admin_link(urls.get("poster")))
+            v = rec.get("video") or (last.get("video") if remade else None) or {}
+            rc = (self.receipts(eid, rec) or {}) if rec.get("video") else {}
+            status = "down" if rec.get("hidden") and rec.get("hidden_by") != "reports" else \
+                "hidden" if rec.get("hidden") else "remake" if remade else "up" if rec.get("state") == "done" \
+                else rec.get("state") or "none"
+            videos.append({"id": eid, "headline": rc.get("title") or rec.get("title") or "",
+                           "articles": rc.get("articles"), "outlets": rc.get("outlets"), "claims": rc.get("claims"),
+                           "claimsBacked": rc.get("claimsBacked"),
+                           "eventTitle": rec.get("title") or "", "status": status, "state": rec.get("state"),
+                           "made": v.get("made_at"), "cost": v.get("usd") if v.get("usd") is not None else rec.get("spent_usd"),
+                           "minutes": round(float(v["seconds"]) / 60, 1) if v.get("seconds") else None,
+                           "src": urls.get("src"), "poster": urls.get("poster"), "duration": D.clip_length(urls.get("duration_s")),
+                           "reports": int(rec.get("reports") or 0), "keptUp": bool(rec.get("keep_up")),
+                           "hiddenBy": rec.get("hidden_by"), "hiddenAt": rec.get("hidden_at"),
+                           "noVideoReason": rec.get("no_video_reason")})
+        videos.sort(key=lambda v: v.get("made") or "", reverse=True)
+        hidden = [{"video": r.get("id"), "headline": r.get("title") or "", "since": r.get("hidden_at"),
+                   "reports": int(r.get("reports") or 0), "by": r.get("hidden_by")}
+                  for r in records.values() if r.get("hidden")]
+        left = None
+        try:
+            left = g._tavily_seen[1] if g._tavily_seen else (g.tavily_left() if g.tavily_left else None)
+        except Exception:
+            left = None
+        mode_rec = (g.store.get(g.MODE_KEY)[0] or {})
+        return {
+            "now": D.iso(now),
+            "site": dict(self.site_numbers("admin"), searchCreditsLeft=left, searchCreditsPauseAt=g.lim["tavily_min_credits"],
+                         spentToday=float(ledgers[days[0]].get("spent_usd") or 0.0), modeBy=mode_rec.get("by"),
+                         modeAt=mode_rec.get("at"), modeNote=mode_rec.get("note")),
+            "reports": out_reports, "hidden": hidden, "log": out_log, "videos": videos, "making": making_rows,
+            "spend": {"today": float(ledgers[days[0]].get("spent_usd") or 0.0),
+                      "inProgressEstimate": round(len(making) * float(st["estimate_usd"]), 2),
+                      "last7days": [{"day": d, "usd": float(ledgers[d].get("spent_usd") or 0.0),
+                                     "videos": len(ledgers[d].get("videos") or [])} for d in reversed(days)],
+                      "perStep": per_step},
+            "steps": D.steps_list(), "reportReasons": [{"key": k, "label": D.REASON_LABELS.get(k, k)} for k in g.rep["reasons"]],
+            "events": [{"id": k, "title": r.get("title") or ""} for k, r in records.items()],
+            "gateMessages": dict(MESSAGES),
+        }
+
+    def admin_act(self, action: str, body: dict, by: str) -> dict:
+        g = self.gate
+        note = str(body.get("note") or "")
+        if action in ("pause", "open"):
+            out = g.set_mode("closed" if action == "pause" else "open", by=by, note=note)
+            return {"ok": True, "mode": out["mode"]}
+        eid = body.get("event")
+        try:
+            eid = safe_id(eid)
+        except ValueError:
+            return {"ok": False, "message": "Which video? The event id is missing."}
+        if action == "take_down":
+            rec = g.take_down(eid, by=by, note=note)
+        elif action == "restore":
+            rec = g.restore(eid, by=by, note=note, keep_up=bool(body.get("keep_up")))
+        elif action == "remake":
+            if not note.strip():
+                return {"ok": False, "message": "Write a note first. Stringer needs to know what to fix."}
+            rec = g.remake(eid, by=by, note=note)
+        else:
+            return {"ok": False, "message": f"Unknown action {action!r}."}
+        with self.lock:
+            self.records[eid] = rec
+        self._receipts = {k: v for k, v in self._receipts.items() if k[0] != eid}
+        return {"ok": True, "record": {"hidden": bool(rec.get("hidden")), "keep_up": bool(rec.get("keep_up")),
+                                       "state": rec.get("state")}}
+
+    # ---- the landing page's map --------------------------------------------------------------------------
+    def geo(self) -> tuple[bytes, bytes] | None:
+        with self._geo_lock:
+            if self._geo is None:
+                text = geo.load()
+                if text is None:
+                    return None
+                raw = text.encode("utf-8")
+                self._geo = (raw, gzip.compress(raw, 6))
+            return self._geo
 
 
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Stringer test</title>
-<style>
-:root{{--bg:#fafafa;--ink:#18181b;--soft:#71717a;--line:#e4e4e7;--accent:#2563eb}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#09090b;--ink:#f4f4f5;--soft:#a1a1aa;--line:#27272a;--accent:#60a5fa}}}}
-body{{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}}
-main{{max-width:760px;margin:0 auto;padding:24px 16px}} h1{{font-size:20px;margin:0 0 4px}}
-.s{{color:var(--soft);font-size:13px;margin-bottom:20px}} ul{{list-style:none;padding:0;margin:0}}
-li{{border-top:1px solid var(--line);padding:14px 0}} .t{{font-weight:600}} .m{{color:var(--soft);font-size:13px}}
-.a{{margin-top:8px;font-size:14px}} button{{font:inherit;padding:6px 12px;border:1px solid var(--accent);
-background:none;color:var(--accent);border-radius:6px;cursor:pointer}} video{{width:220px;border-radius:8px;display:block}}
-</style></head><body><main>
-<h1>Stringer: deploy test</h1>
-<div class="s">Test page only. Events by Monitor the Situation. List updated {when}. Videos today: {today} of {per_day}. {err}</div>
-<ul>{items}</ul></main>
-<script>
-const act = (li, st) => {{
-  const a = li.querySelector('.a'); a.textContent = '';
-  if (st.state === 'done' && st.video && st.video.url) {{
-    const v = document.createElement('video'); v.controls = true; v.src = st.video.url;
-    if (st.video.poster) v.poster = st.video.poster; a.append(v); return; }}
-  if (st.state === 'making') {{ a.textContent = 'Making the video…'; setTimeout(() => poll(li), 5000); return; }}
-  if (st.state === 'no_video') {{ a.textContent = 'No video: ' + (st.why || ''); return; }}
-  const b = document.createElement('button'); b.textContent = 'Make video';
-  b.onclick = async () => {{
-    b.disabled = true;
-    const r = await fetch('/make?event=' + encodeURIComponent(li.dataset.id), {{method: 'POST'}});
-    const d = await r.json(); a.textContent = d.message || '';
-    if (d.ok) setTimeout(() => poll(li), 3000); else b.disabled = false;
-  }};
-  a.append(b);
-}};
-const poll = async li => {{
-  const r = await fetch('/status?event=' + encodeURIComponent(li.dataset.id)); act(li, await r.json()); }};
-document.querySelectorAll('li[data-id]').forEach(li => poll(li));
-</script></body></html>"""
+# ---- static files: the pages' code and fonts, kept in memory with a gzipped copy -----------------------------
+_static: dict[str, tuple[int, tuple[bytes, bytes | None, str, str]]] = {}
+_static_lock = threading.Lock()
+
+
+def static_file(rel: str) -> tuple[bytes, bytes | None, str, str] | None:
+    """(body, gzipped body or None, content type, etag) for /static/<rel>, or None. Kept in memory and read
+    again only when the file changes (one stat per request), so edits show on reload on the Mac."""
+    if not SAFE_PATH.fullmatch(rel) or ".." in rel.split("/"):
+        return None
+    if rel.startswith("fonts/"):
+        p = (FONTS / rel[len("fonts/"):]).resolve()
+        root = FONTS.resolve()
+    else:
+        p = (STATIC / rel).resolve()
+        root = STATIC.resolve()
+    if root not in p.parents:
+        return None
+    try:
+        mtime = p.stat().st_mtime_ns
+    except OSError:
+        return None
+    if not p.is_file():
+        return None
+    with _static_lock:
+        hit = _static.get(rel)
+        if hit and hit[0] == mtime:
+            return hit[1]
+    body = p.read_bytes()
+    ctype = TYPES.get(p.suffix) or mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    gz = gzip.compress(body, 6) if ctype.startswith(("text/", "application/json", "image/svg")) and len(body) > 1024 else None
+    item = (body, gz, ctype, '"' + hashlib.sha1(body).hexdigest()[:16] + '"')
+    with _static_lock:
+        _static[rel] = (mtime, item)
+    return item
 
 
 def handler_for(site: Site):
@@ -179,24 +655,90 @@ def handler_for(site: Site):
                     return v, False
             return secrets.token_hex(16), True
 
-        def _send(self, code: int, body: str, ctype: str, cookie: str | None = None) -> None:
-            data = body.encode("utf-8")
+        def _email(self) -> str | None:
+            e = self.headers.get(IAP_EMAIL) or ""
+            return e.split(":", 1)[1] if ":" in e else (e or None)
+
+        def _send(self, code: int, body, ctype: str, cookie: str | None = None, cache: str = "no-store",
+                  extra: dict | None = None) -> None:
+            data = body.encode("utf-8") if isinstance(body, str) else body
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             if cookie:
                 self.send_header("Set-Cookie", f"{COOKIE}={cookie}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly")
             self.end_headers()
-            self.wfile.write(data)
+            if self.command != "HEAD":
+                self.wfile.write(data)
 
         def _json(self, obj, code: int = 200, cookie: str | None = None) -> None:
-            self._send(code, json.dumps(obj), "application/json", cookie)
+            self._send(code, json.dumps(obj, ensure_ascii=False, default=str), "application/json; charset=utf-8", cookie)
 
-        def _media(self, name: str) -> None:
-            bucket = os.environ.get("STRINGER_VIDEO_BUCKET")
-            if not bucket or not MEDIA.fullmatch(name):
+        def _body(self) -> dict:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0 or n > 20000:
+                return {}
+            try:
+                d = json.loads(self.rfile.read(n).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return {}
+            return d if isinstance(d, dict) else {}
+
+        def _gz_ok(self) -> bool:
+            return "gzip" in (self.headers.get("Accept-Encoding") or "")
+
+        def _static(self, rel: str) -> None:
+            if rel == "atlas/js/data/geo.js":
+                g = site.geo()
+                if not g:
+                    return self._send(404, "map data not built", "text/plain")
+                raw, gz = g
+                etag = '"geo-' + hashlib.sha1(raw[:4096]).hexdigest()[:12] + f'-{len(raw)}"'
+                item = (raw, gz, TYPES[".js"], etag)
+            else:
+                item = static_file(rel)
+            if item is None:
                 return self._send(404, "not found", "text/plain")
+            body, gz, ctype, etag = item
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            extra = {"ETag": etag, "Vary": "Accept-Encoding"}
+            if gz is not None and self._gz_ok():
+                extra["Content-Encoding"] = "gzip"
+                body = gz
+            self._send(200, body, ctype, cache="private, max-age=300", extra=extra)
+
+        def _page(self, rel: str, cookie: str | None) -> None:
+            item = static_file(rel)
+            if item is None:
+                return self._send(404, "not found", "text/plain")
+            body, gz, ctype, etag = item
+            extra = {"Vary": "Accept-Encoding"}
+            if gz is not None and self._gz_ok():
+                extra["Content-Encoding"] = "gzip"
+                body = gz
+            self._send(200, body, ctype, cookie=cookie, cache="no-cache", extra=extra)
+
+        def _media(self, name: str, q: dict | None = None) -> None:
+            if not MEDIA.fullmatch(name):
+                return self._send(404, "not found", "text/plain")
+            eid = name.split("/")[1]
+            rec = site.get_record(eid)
+            gone = rec.get("hidden") or (not rec.get("video") and rec.get("state") != "done")
+            if gone and not site.media_pass_ok(name, q or {}):   # hidden: only with the review desk's pass
+                return self._send(404, "not found", "text/plain")
+            bucket = os.environ.get("STRINGER_VIDEO_BUCKET")
+            if not bucket:
+                p = site.files.local_media(eid, name.rsplit("/", 1)[1])
+                return self._local_file(p) if p else self._send(404, "not found", "text/plain")
             r = cloud.open_object(bucket, name, self.headers.get("Range"))
             try:
                 if r.status_code not in (200, 206):
@@ -216,41 +758,152 @@ def handler_for(site: Site):
             finally:
                 r.close()
 
+        def _local_file(self, p: Path) -> None:
+            """A run's own file on the Mac, with one byte range (so the player can seek)."""
+            size = p.stat().st_size
+            ctype = mimetypes.guess_type(p.name)[0] or ("text/vtt" if p.suffix == ".vtt" else "application/octet-stream")
+            start, end, code = 0, size - 1, 200
+            m = re.fullmatch(r"bytes=(\d*)-(\d*)", (self.headers.get("Range") or "").strip())
+            if m and (m.group(1) or m.group(2)):
+                if m.group(1):
+                    start = int(m.group(1))
+                    end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+                else:
+                    start = max(0, size - int(m.group(2)))
+                if start > end or start >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                code = 206
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            if code == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            try:
+                with open(p, "rb") as f:
+                    f.seek(start)
+                    left = end - start + 1
+                    while left > 0:
+                        chunk = f.read(min(256 * 1024, left))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def _admin_by(self) -> str:
+            e = self._email()
+            return e.split("@", 1)[0] if e else "admin"
+
+        def do_HEAD(self):
+            self.do_GET()
+
         def do_GET(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             visitor, new = self._visitor()
+            cookie = visitor if new else None
             if u.path == "/healthz":
                 return self._send(200, "ok", "text/plain")
+            if u.path == "/favicon.ico":                 # the pages have none; say so without a 404
+                self.send_response(204)
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                return
+            if u.path.startswith("/static/"):
+                return self._static(u.path[len("/static/"):])
             if u.path.startswith("/media/"):
-                return self._media(u.path[len("/media/"):])
+                return self._media(u.path[len("/media/"):], q)
+            if u.path in PAGES:
+                site.fresh()
+                return self._page(PAGES[u.path], cookie)
+            if u.path == "/api/site":
+                site.fresh()
+                return self._json(site.front(visitor, self._email()), cookie=cookie)
+            if u.path == "/api/progress" and q.get("event"):
+                try:
+                    out = site.progress(safe_id(q["event"][0]), visitor)
+                except ValueError:
+                    out = None
+                return self._json(out, cookie=cookie) if out else self._json({"error": "no run for this story"}, 404)
+            if u.path == "/api/receipts" and q.get("event"):
+                try:
+                    out = site.receipts(safe_id(q["event"][0]))
+                except ValueError:
+                    out = None
+                return self._json(out) if out else self._json({"error": "no receipts for this story"}, 404)
             if u.path == "/status" and q.get("event"):
                 return self._json(site.record(q["event"][0]))
-            if u.path == "/":
-                site.fresh()
-                return self._send(200, site.page(), "text/html; charset=utf-8", visitor if new else None)
+            if u.path == "/admin/api":
+                if not site.admin_token:
+                    return self._json({"error": "The admin token isn't set up yet (GATE_ADMIN_TOKEN)."}, 503)
+                if not site.admin_ok(self.headers.get(ADMIN_HEADER)):
+                    time.sleep(0.4)
+                    return self._json({"error": "That isn't the admin password."}, 401)
+                return self._json(site.admin())
+            if u.path in ("/front.html", "/landing.html", "/progress.html", "/admin.html"):
+                return self._redirect({"/front.html": "/feed", "/landing.html": "/", "/progress.html": "/progress",
+                                       "/admin.html": "/admin"}[u.path] + (f"?{u.query}" if u.query else ""))
             self._send(404, "not found", "text/plain")
+
+        def _redirect(self, to: str) -> None:
+            self.send_response(302)
+            self.send_header("Location", to)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def do_POST(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             visitor, new = self._visitor()
+            cookie = visitor if new else None
             if u.path == "/make" and q.get("event"):
-                return self._json(site.make(q["event"][0], visitor), cookie=visitor if new else None)
+                return self._json(site.make(q["event"][0], visitor), cookie=cookie)
+            if u.path == "/report":
+                b = self._body()
+                return self._json(site.report(str(b.get("event") or ""), visitor, str(b.get("reason") or "other"),
+                                              str(b.get("note") or "")), cookie=cookie)
+            if u.path.startswith("/admin/api/"):
+                if not site.admin_token:
+                    return self._json({"error": "The admin token isn't set up yet (GATE_ADMIN_TOKEN)."}, 503)
+                if not site.admin_ok(self.headers.get(ADMIN_HEADER)):
+                    time.sleep(0.4)
+                    return self._json({"error": "That isn't the admin password."}, 401)
+                return self._json(site.admin_act(u.path[len("/admin/api/"):], self._body(), self._admin_by()))
             self._send(404, "not found", "text/plain")
 
         def log_message(self, fmt, *args):     # one short line per request, no visitor ids
-            print(f"{self.command} {urlparse(self.path).path} -> {args[1] if len(args) > 1 else ''}")
+            p = urlparse(self.path).path
+            if p.startswith("/static/") or p == "/healthz":
+                return
+            print(f"{self.command} {p} -> {args[1] if len(args) > 1 else ''}")
     return H
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8080)))
+    ap.add_argument("--feed", help="read events from this JSON file instead of the live feed (a list, or {events: [...]})")
+    ap.add_argument("--no-model", action="store_true", help="content check by the keyword rule only (no model calls)")
     a = ap.parse_args(argv)
-    site = Site()
+    fetch = feed.fetch
+    if a.feed:
+        path = Path(a.feed)
+        fetch = lambda: feed._events_of(json.loads(path.read_text(encoding="utf-8")))
+    gate = Gate(complete=None, model="") if a.no_model else Gate()
+    site = Site(gate=gate, fetch=fetch)
     threading.Thread(target=site.keep_fresh, daemon=True).start()
-    print(f"Stringer test site on :{a.port}")
+    threading.Thread(target=site.geo, daemon=True).start()        # build the map data once, before anyone asks
+    print(f"Stringer site on :{a.port}")
     ThreadingHTTPServer(("0.0.0.0", a.port), handler_for(site)).serve_forever()
     return 0
 

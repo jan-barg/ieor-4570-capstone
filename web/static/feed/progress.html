@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stringer · Being made</title>
+<meta name="description" content="Watch a Stringer video being made, one agent at a time.">
+<meta name="theme-color" content="#0A1033">
+<link rel="stylesheet" href="/static/feed/css/base.css">
+<link rel="stylesheet" href="/static/feed/css/progress.css">
+</head>
+<body class="on-night grain-night">
+<a class="skip" href="#steps">Skip to the steps</a>
+
+<div class="pg" id="pg" data-state="running">
+  <header class="top">
+    <a class="wordmark" href="/" aria-label="Stringer, about the project"><span class="knot"></span>Stringer</a>
+    <p class="tagline caps">World news, explained, with the bias shown</p>
+    <div class="spacer"></div>
+    <a class="back" href="/feed"><svg class="icon icon-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6l-6 6 6 6"/></svg><span>Back to the feed</span></a>
+    <span class="me" aria-label="Your account"><span class="initials" aria-hidden="true"></span></span>
+  </header>
+
+  <!-- always visible: where the run stands -->
+  <section class="band" id="band" aria-label="How the video is coming along">
+    <div class="b-step">
+      <span class="b-pulse" aria-hidden="true"></span>
+      <p class="caps b-no" id="b-no">Step 1 of 8</p>
+      <p class="b-label" id="b-label" aria-live="polite"></p>
+    </div>
+    <div class="b-cell b-time"><p class="v num" id="b-time">0:00</p><p class="caps k"><span id="b-time-k">Elapsed</span><span class="k-l"> · usually 4 to 5 min</span></p></div>
+    <div class="b-cell b-money">
+      <p class="v num"><span id="b-usd">$0.00</span> <span class="of of-l"></span><span class="of of-s"></span></p>
+      <span class="spend" id="spend" aria-hidden="true"><span class="fill" id="spend-fill"></span></span>
+      <p class="caps k">Stops by itself at $5</p>
+    </div>
+    <div class="b-cell b-calls"><p class="v num" id="b-calls">0</p><p class="caps k">Model calls</p></div>
+    <div class="b-cell b-credits"><p class="v num" id="b-credits">0</p><p class="caps k">News searches</p></div>
+    <div class="b-demo" role="group" aria-label="Demo replay controls">
+      <span class="demo-tag caps">Replay</span>
+      <div class="seg" role="group" aria-label="Replay speed">
+        <button type="button" data-speed="1" aria-pressed="false">1×</button>
+        <button type="button" data-speed="10" aria-pressed="true">10×</button>
+      </div>
+      <button type="button" class="ctl" id="b-pause" aria-label="Pause the replay"></button>
+      <button type="button" class="ctl ctl-wide" id="b-skip"><span>Skip to end</span></button>
+    </div>
+  </section>
+
+  <!-- left rail (desktop): the story and its steps, in the story-over-time grammar -->
+  <aside class="rail srail" id="srail" aria-label="The steps">
+    <div class="story-head" id="story-head"></div>
+    <div class="steps-slot" id="steps-slot-l"></div>
+  </aside>
+
+  <!-- the card that fills in -->
+  <main class="stagecol" id="stagecol">
+    <div class="framewrap" id="framewrap">
+      <div class="frame paper" id="frame" data-stage="sides"></div>
+    </div>
+    <div class="under" id="under"></div>
+  </main>
+
+  <!-- right rail (desktop): the selected agent's calls, searches and hand-on. Tablets: the whole trace. -->
+  <aside class="rail drail" id="drail" aria-label="What the agent is doing">
+    <div class="note-slot" id="note-slot-r"></div>
+    <div class="sum-slot" id="sum-slot-r"></div>
+    <div class="steps-slot" id="steps-slot-r"></div>
+    <div class="detail" id="detail"></div>
+  </aside>
+
+  <!-- phone: the lip that opens the steps -->
+  <div class="lip" id="lip">
+    <button type="button" class="lip-open" id="lip-open" aria-controls="sheet" aria-expanded="false">
+      <span class="grip" aria-hidden="true"></span>
+      <span class="lip-t">Step by step</span>
+      <span class="lip-dots" id="lip-dots" aria-hidden="true"></span>
+    </button>
+    <div class="lip-ctl" role="group" aria-label="Demo replay controls">
+      <button type="button" class="lip-speed" id="lip-speed" aria-label="Replay speed: 10 times. Switch to normal speed">10×</button>
+      <button type="button" class="lip-skip" id="lip-skip">Skip</button>
+      <a class="lip-feed" id="lip-feed" href="/feed" hidden>Watch in the feed</a>
+    </div>
+  </div>
+</div>
+
+<!-- phone: the trace in a pull-up sheet (the band stays visible above it) -->
+<div class="sheet" id="sheet" role="dialog" aria-modal="false" aria-labelledby="sheet-title" hidden>
+  <div class="sheet-card">
+    <div class="sh-top">
+      <span class="grip" aria-hidden="true"></span>
+      <h2 class="sh-title serif" id="sheet-title">Step by step</h2>
+      <p class="sh-sub" id="sheet-sub">Each agent, with its model calls and searches</p>
+      <button type="button" class="sh-close" id="sheet-close" aria-label="Close the steps"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="sh-body" id="sheet-body">
+      <div class="note-slot" id="note-slot-s"></div>
+      <div class="sum-slot" id="sum-slot-s"></div>
+      <div class="steps-slot" id="steps-slot-s"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/feed/js/boot.js" data-load="STRINGER_DEMO=/api/site STRINGER_RUN=/api/progress" data-query data-scripts="/static/feed/js/common.js /static/feed/js/progress.js"></script>
+</body>
+</html>

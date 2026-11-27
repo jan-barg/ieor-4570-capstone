@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stringer · How it works</title>
+<meta name="description" content="Stringer makes a 60-second video for a news story. It shows where it happened, how each side told it, and which claims hold up.">
+<link rel="stylesheet" href="/static/atlas/css/base.css">
+<link rel="stylesheet" href="/static/atlas/css/landing.css">
+</head>
+<body class="landing">
+<a class="skip" href="#facts">Skip to the facts</a>
+
+<header class="top">
+  <a class="mark" href="/" aria-current="page"><span class="mark__pin" aria-hidden="true"></span>Stringer</a>
+  <nav class="top__nav" aria-label="Pages">
+    <a href="/feed">Front page</a>
+    <a href="/" aria-current="page">How it works</a>
+  </nav>
+  <a class="btn btn--go top__cta" href="/feed"><span class="btn__pin" aria-hidden="true"></span>Watch the videos</a>
+</header>
+
+<div class="tour" id="tour">
+  <div class="scene" id="scene" aria-hidden="true">
+    <canvas class="scene__grain" id="grain"></canvas>
+    <canvas class="scene__map" id="map"></canvas>
+    <p class="scene__place" id="place"></p>
+    <ol class="rail" id="rail"></ol>
+  </div>
+
+  <div class="tour__text">
+    <section class="hero" id="hero" aria-labelledby="heroTitle">
+      <p class="caps kick">For Columbia students</p>
+      <h1 id="heroTitle">The news, explained in 60&nbsp;seconds, with the bias shown.</h1>
+      <p class="hero__dek">Pick a story on today's map. Stringer reads how each side covered it and checks every claim against those articles. Then it makes a short video that shows who said what. It doesn't tell you who's right.</p>
+      <div class="hero__go">
+        <a class="btn btn--go btn--big" href="/feed"><span class="btn__pin" aria-hidden="true"></span>Open today's map</a>
+        <a class="btn btn--quiet btn--big" href="#step-0">See how a video is made</a>
+      </div>
+      <p class="hero__fine">Sign in with your Columbia account. The videos are free to watch and free to make.</p>
+      <p class="hero__scroll caps" aria-hidden="true"><i></i>Scroll</p>
+    </section>
+
+    <div class="zoom-room" aria-hidden="true"></div>
+
+    <section class="step" id="step-0" data-k="0" aria-labelledby="s0">
+      <div class="card">
+        <p class="caps kick">One event</p>
+        <h2 id="s0">Dock workers walk out in Antwerp</h2>
+        <p>It starts with a story on the Monitor the Situation feed. The port is shut and reports keep coming in. Anyone signed in can ask Stringer for a video of it.</p>
+        <p class="card__src">Events by Monitor the Situation</p>
+      </div>
+    </section>
+
+    <section class="step" data-k="1" aria-labelledby="s1">
+      <div class="card">
+        <p class="caps kick"><b>1</b> of 7</p>
+        <h2 id="s1">Finding the two sides</h2>
+        <p>Most stories have two camps that tell them differently. For this strike, it's union-friendly outlets and the business press. Stringer works that out first.</p>
+        <ul class="card__sides">
+          <li style="--c:var(--side-a)"><i></i>Union-friendly outlets</li>
+          <li style="--c:var(--side-b)"><i></i>Business press</li>
+          <li style="--c:var(--other)"><i></i>Wire services</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="step" data-k="2" aria-labelledby="s2">
+      <div class="card">
+        <p class="caps kick"><b>2</b> of 7</p>
+        <h2 id="s2">Searching the news</h2>
+        <p>It looks for articles from each side and from the wire services, wherever they were published. For Antwerp it found ten.</p>
+        <div class="sources__big"><b>10</b><span>news articles</span></div>
+        <div class="dotbar" aria-hidden="true"><span class="a" style="--n:4"></span><span class="b" style="--n:4"></span><span class="o" style="--n:2"></span></div>
+        <p class="card__small">4 union-friendly, 4 business press, 2 from the wires.</p>
+      </div>
+    </section>
+
+    <section class="step" data-k="3" aria-labelledby="s3">
+      <div class="card">
+        <p class="caps kick"><b>3</b> of 7</p>
+        <h2 id="s3">Reading the articles</h2>
+        <p>It reads each article once and notes who said what. Same strike, two ways of telling it:</p>
+        <div class="side-card side-card--a"><p class="side-card__name">Union-friendly outlets</p><p class="side-card__how">Centred on safety on night shifts and quoted dock workers.</p></div>
+        <div class="side-card side-card--b"><p class="side-card__name">Business press</p><p class="side-card__how">Centred on the cost to shippers, put at €40 million a day.</p></div>
+      </div>
+    </section>
+
+    <section class="step" data-k="4" aria-labelledby="s4">
+      <div class="card">
+        <p class="caps kick"><b>4</b> of 7</p>
+        <h2 id="s4">Checking every claim</h2>
+        <p>Every claim has to match an article Stringer read. If it can't find one, the claim stays out of the video.</p>
+        <div class="claims" aria-hidden="true"></div>
+        <p class="card__small"><b>29 of 31</b> claims matched an article. Stringer left out the other 2.</p>
+      </div>
+    </section>
+
+    <section class="step" data-k="5" aria-labelledby="s5">
+      <div class="card">
+        <p class="caps kick"><b>5</b> of 7</p>
+        <h2 id="s5">Writing the script</h2>
+        <p>It writes 60 seconds of narration. Each line points to the article it came from.</p>
+        <ol class="script">
+          <li><span>The port of Antwerp is shut for a third day.</span><i style="--c:var(--other)">Atlas Wire</i></li>
+          <li><span>Union outlets lead with safety on night shifts.</span><i style="--c:var(--side-a)">Union Voice</i></li>
+          <li><span>The business press leads with the cost: €40 million a day.</span><i style="--c:var(--side-b)">Market Ledger</i></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="step" data-k="6" aria-labelledby="s6">
+      <div class="card">
+        <p class="caps kick"><b>6</b> of 7</p>
+        <h2 id="s6">Recording the voice</h2>
+        <p>An AI voice reads the script. Every video says it was made with AI, on screen and on the site.</p>
+        <div class="wave" aria-hidden="true"></div>
+        <p class="card__small"><span class="ai-chip ai-mark">Made with AI</span> 1 minute 6 seconds of narration</p>
+      </div>
+    </section>
+
+    <section class="step" data-k="7" aria-labelledby="s7">
+      <div class="card">
+        <p class="caps kick"><b>7</b> of 7</p>
+        <h2 id="s7">Drawing the video</h2>
+        <p>Last, it draws the video in the same style every time: the map, both sides, the words each side chose, and where it all came from.</p>
+        <p class="words"><span class="wa">“walkout”</span><i>vs</i><span class="wb">“blockade”</span></p>
+        <p>The whole thing, from your click to the finished video, takes 4 to 5 minutes.</p>
+        <a class="btn btn--go" href="/feed"><span class="btn__pin" aria-hidden="true"></span>Watch it on the front page</a>
+      </div>
+    </section>
+    <div class="tour__end" aria-hidden="true"></div>
+  </div>
+</div>
+
+<main class="after">
+  <section class="does" aria-labelledby="doesTitle">
+    <div class="does__head">
+      <p class="caps kick">What it does, and what it doesn't</p>
+      <h2 id="doesTitle">Explained, with the bias shown.</h2>
+      <p class="lede">News outlets don't all tell a story the same way. Stringer doesn't try to hide that or average it out. It shows you the split and the sources behind it.</p>
+    </div>
+    <div class="does__cols">
+      <div class="col col--yes">
+        <h3 class="caps">Stringer does</h3>
+        <ul>
+          <li>Read what each side published about the story.</li>
+          <li>Check every claim in the script against those articles.</li>
+          <li>Show who said what, and the words each side chose.</li>
+          <li>Leave out anything it can't match to an article.</li>
+        </ul>
+      </div>
+      <div class="col col--no">
+        <h3 class="caps">Stringer doesn't</h3>
+        <ul>
+          <li>Decide which side is right.</li>
+          <li>Promise you the whole truth. It can only be as good as the articles it read.</li>
+          <li>Hide that it's made by AI. Every video carries the label.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="divide" aria-labelledby="divTitle">
+    <div class="divide__dots" id="divDots" aria-hidden="true"></div>
+    <div>
+      <h2 id="divTitle">Sometimes there's no real divide.</h2>
+      <p>After an earthquake or a flood, outlets mostly agree on what happened. Then the video says there's no real divide instead of inventing one. 7 of the last 31 stories were like that.</p>
+    </div>
+  </section>
+
+  <section class="facts" id="facts" aria-labelledby="factsTitle" tabindex="-1">
+    <h2 id="factsTitle">The practical part</h2>
+    <dl class="ledger">
+      <div><dt>Who can use it</dt><dd>Anyone with a Columbia account, for now. You sign in with it.</dd></div>
+      <div><dt>What it costs you</dt><dd>Nothing. Each video costs the project about <span data-live="estimate">$0.66</span>, and it can never cost more than <span data-live="cap">$5</span>.</dd></div>
+      <div><dt>How long a video takes</dt><dd>4 to 5 minutes. You can leave the page while Stringer works.</dd></div>
+      <div><dt>How many videos</dt><dd><span data-live="perDay">10</span> a day for the whole site. Each person can start <span data-live="perHour">3</span> an hour, and Stringer makes at most <span data-live="atOnce">3</span> at once.</dd></div>
+      <div><dt>When something's wrong</dt><dd>Every video has a Report link. One report hides it until we've checked it.</dd></div>
+      <div><dt>Where the stories come from</dt><dd>The live feed from Monitor the Situation. Stringer picks from its top 10.</dd></div>
+    </dl>
+  </section>
+
+  <section class="last" aria-labelledby="lastTitle">
+    <canvas class="last__map" id="lastMap" aria-hidden="true"></canvas>
+    <div class="last__text">
+      <h2 id="lastTitle">Today's map is open.</h2>
+      <p data-live="todayLine">Pick a story and watch, or make the next one.</p>
+      <a class="btn btn--light btn--big" href="/feed"><span class="btn__pin" aria-hidden="true"></span>Open today's map</a>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>Events by Monitor the Situation</span>
+  <span>Videos made with AI</span>
+  <span>A Columbia student project, IEOR 4570</span>
+</footer>
+
+<script src="/static/atlas/js/landing-story.js"></script>
+<script src="/static/atlas/js/vendor/d3-array.min.js"></script>
+<script src="/static/atlas/js/vendor/d3-geo.min.js"></script>
+<script src="/static/atlas/js/vendor/topojson-client.min.js"></script>
+<script src="/static/atlas/js/data/geo.js"></script>
+<script src="/static/atlas/js/atlas.js"></script>
+<script src="/static/atlas/js/stories.js"></script>
+<script src="/static/atlas/js/posters.js"></script>
+<script src="/static/atlas/js/landing.js"></script>
+<script src="/static/atlas/js/landing-live.js"></script>
+</body>
+</html>

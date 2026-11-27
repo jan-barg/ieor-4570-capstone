@@ -364,3 +364,51 @@ def test_local_store_end_to_end(tmp_path):
     t = g.start(ev(), "v").ticket
     t.finish(video={"url": "u"})
     assert (tmp_path / "gate" / "events").is_dir() and g.start(ev(), "v").code == "has_video"
+
+
+# ---- module 9: the site's own numbers, the admin's switch, remakes -------------------------------------------------
+
+def test_visitor_status_counts_the_last_hour_and_reports():
+    clock = Clock()
+    g = gate(clock=clock, cfg=cfg_with(per_visitor_per_hour=2, at_once=10, videos_per_day=10))
+    assert g.visitor_status("v") == {"this_hour": 0, "per_hour": 2, "retry_after_s": 0, "reports_today": 0,
+                                     "reports_per_day": g.rep["per_visitor_per_day"]}
+    g.start(ev("a"), "v")
+    clock.add(minutes=20)
+    g.start(ev("b"), "v")
+    s = g.visitor_status("v")
+    assert s["this_hour"] == 2 and s["retry_after_s"] == 40 * 60
+    assert g.visitor_status("someone else")["this_hour"] == 0
+    clock.add(minutes=41)
+    assert g.visitor_status("v")["this_hour"] == 1 and g.visitor_status("v")["retry_after_s"] == 0
+    g.report(ev("a")["id"], "v", "other")
+    assert g.visitor_status("v")["reports_today"] == 1
+    clock.add(days=1)
+    assert g.visitor_status("v")["reports_today"] == 0
+
+
+def test_the_admins_switch_is_kept_in_the_store():
+    store = MemoryStore()
+    g = gate(store=store)
+    rec = g.set_mode("closed", by="jan", note="a break\x00")
+    assert rec["mode"] == "closed" and rec["note"] == "a break" and g.mode == "closed"
+    assert g.start(ev(), "v").code == "closed" and g.screen([ev()]) == []
+    other = gate(store=store)                       # another machine of the site
+    assert other.mode == "closed" and other.status()["mode"] == "closed"
+    g.set_mode("anything else", by="jan")
+    assert g.mode == "open" and g.start(ev(), "v").ok
+    assert sorted(e["kind"] for e in g.log() if e["kind"] in ("paused", "opened")) == ["opened", "paused"]
+
+
+def test_remake_clears_a_hide_from_reports():
+    g = gate(cfg=cfg_with(per_visitor_per_hour=10))
+    eid = ev()["id"]
+    g.start(ev(), "v").ticket.finish(video={"url": "u"})
+    r = g.report(eid, "viewer", "wrong_facts", "")
+    assert r["code"] == "reported" and r["hidden"]
+    assert g.start(ev(), "v").code == "taken_down"
+    rec = g.remake(eid, by="jan", note="the date was wrong")
+    assert not rec["hidden"] and rec["hidden_by"] is None and rec["reports_since_review"] == 0 and rec["video"] is None
+    assert rec["history"][-1]["outcome"] == "reset for a remake by jan" and rec["history"][-1]["video"] == {
+        "url": "u", "made_at": rec["history"][-1]["video"]["made_at"]}
+    assert g.start(ev(), "v").ok

@@ -14,6 +14,8 @@ What the website calls (decided Nov 26, Jan, decisions page "Stringer Gate Decis
     ticket.finish(video=... | no_video=... | error=...)
     gate.report(event, visitor, reason, note)   the Report link; the first report hides the video
     gate.take_down / restore / remake / reports / hidden / log / status         the admin side
+    gate.set_mode("closed" | "open", by, note)   the admin's pause button (kept in the store, module 9)
+    gate.visitor_status(visitor) -> this visitor's starts this hour and reports today (the front page meter)
 
 The checks, cheapest first: the site is open; the event qualifies (rules.py); the content check
 allows it (policy.py, saved per event); it isn't taken down; it has no video and none is being made;
@@ -144,12 +146,44 @@ class Gate:
         self._model = model
         self.now = now or (lambda: dt.datetime.now(dt.timezone.utc))
         self.tavily_left = tavily_left
-        self.mode = (mode or os.environ.get("GATE_MODE") or self.lim.get("mode", "open")).strip().lower()
+        self._mode_given = (mode or "").strip().lower() or None
+        self._mode_default = (os.environ.get("GATE_MODE") or self.lim.get("mode", "open")).strip().lower()
+        self._mode_seen: tuple[float, str] | None = None
         self.workers = workers
         self._tavily_seen: tuple[float, int | None] | None = None
         self._salt: str | None = None
 
     # ---- small helpers ------------------------------------------------------------------------------
+    MODE_KEY = "settings/mode.json"
+    MODE_CHECK_S = 10
+
+    @property
+    def mode(self) -> str:
+        """open or closed. A mode given to Gate(...) wins; then the admin's switch in the store (looked up at
+        most every 10 s); then GATE_MODE; then config/gate.toml."""
+        if self._mode_given:
+            return self._mode_given
+        if not self._mode_seen or time.monotonic() - self._mode_seen[0] > self.MODE_CHECK_S:
+            try:
+                rec, _ = self.store.get(self.MODE_KEY)
+            except Exception:
+                rec = None
+            self._mode_seen = (time.monotonic(), str((rec or {}).get("mode") or self._mode_default).lower())
+        return self._mode_seen[1]
+
+    @mode.setter
+    def mode(self, value: str) -> None:
+        self._mode_given = (value or "").strip().lower() or None
+
+    def set_mode(self, mode: str, by: str, note: str = "") -> dict:
+        """The admin's pause and reopen: kept in the store, so every machine of the site sees it."""
+        mode = "closed" if str(mode).strip().lower() == "closed" else "open"
+        rec = {"mode": mode, "by": by, "at": _iso(self.now()), "note": clean_note(note, self.rep["note_max_chars"])}
+        self.store.update(self.MODE_KEY, lambda cur: (rec, None))
+        self._mode_seen = (time.monotonic(), mode)
+        self._log("paused" if mode == "closed" else "opened", None, by=by, note=rec["note"])
+        return rec
+
     @property
     def model(self) -> str:
         if self._model is None:
@@ -285,6 +319,20 @@ class Gate:
                 "at_once": self.lim["at_once"], "searches_low": self._searches_low(),
                 "estimate_usd": cost.estimate("start", cfg=self.cfg)["usd"]}
 
+    def visitor_status(self, visitor: str) -> dict:
+        """One visitor's own numbers: videos started in the last hour (and when the next is free), reports today."""
+        rec, _ = self.store.get(f"visitors/{self.visitor_key(visitor)}.json")
+        rec = rec or {}
+        now = self.now()
+        starts = [_parse(s) for s in rec.get("starts") or []]
+        starts = [s for s in starts if s and (now - s).total_seconds() < 3600]
+        hour = self.lim["per_visitor_per_hour"]
+        wait = int(3600 - (now - min(starts)).total_seconds()) if len(starts) >= hour else 0
+        r = rec.get("reports") or {}
+        return {"this_hour": len(starts), "per_hour": hour, "retry_after_s": max(0, wait),
+                "reports_today": int(r.get("n") or 0) if r.get("day") == self.day(now) else 0,
+                "reports_per_day": self.rep["per_visitor_per_day"]}
+
     # ---- the click ----------------------------------------------------------------------------------
     def _tidy_slots(self, cur: dict | None) -> dict:
         cur = cur or {}
@@ -411,7 +459,7 @@ class Gate:
             cur["reports"] = {"day": today, "n": n + 1}
             return cur, True
         if not self.store.update(f"visitors/{vkey}.json", count):
-            return {"ok": False, "message": "You've sent the most reports for today. Thanks for helping."}
+            return {"ok": False, "code": "report_limit", "message": "You've sent the most reports for today. Thanks for helping."}
         rid = f"{now:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
         self.store.add(f"reports/{eid}/{rid}.json", {"id": rid, "event": eid, "visitor": vkey, "reason": reason,
                                                      "note": note, "at": _iso(now)})
@@ -429,7 +477,7 @@ class Gate:
         self._log("report", eid, report=rid, reason=reason, visitor=vkey, note=note)
         if hid:
             self._log("hidden", eid, by="reports", report=rid)
-        return {"ok": True, "hidden": hid, "message": "Thanks. We'll take a look."}
+        return {"ok": True, "code": "reported", "hidden": hid, "message": "Thanks. We'll take a look."}
 
     def _admin_set(self, event_id: str, kind: str, by: str, note: str, change) -> dict:
         eid = safe_id(event_id)
@@ -455,11 +503,13 @@ class Gate:
                                                   reports_since_review=0))
 
     def remake(self, event_id: str, by: str, note: str = "") -> dict:
-        """Let an event be made again (Jan only): clears its video, "no video" and tries."""
+        """Let an event be made again (Jan only): clears its video, "no video" and tries. A video hidden by
+        reports goes too: its old video is gone, so the hide has nothing left to hide."""
         def change(c):
             c.setdefault("history", []).append({"outcome": f"reset for a remake by {by}", "at": _iso(self.now()),
                                                 "video": c.get("video")})
-            c.update(state=None, ticket=None, tries=0, video=None, no_video_reason=None)
+            c.update(state=None, ticket=None, tries=0, video=None, no_video_reason=None, hidden=False, hidden_by=None,
+                     keep_up=False, reports_since_review=0)
         return self._admin_set(event_id, "remake", by, note, change)
 
     def reports(self, event_id: str | None = None) -> list[dict]:

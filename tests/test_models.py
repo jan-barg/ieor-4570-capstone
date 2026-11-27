@@ -60,6 +60,34 @@ def test_cache_marks_removed_for_vertex_kept_for_claude(monkeypatch):
     assert msgs[0]["content"][0]["cache_control"]  # caller's list not modified
 
 
+def test_call_listeners_hear_answers_and_failures(monkeypatch, tmp_path):
+    """models.on_call: what the live progress page gets for every call (module 9). Offline: litellm is faked."""
+    import litellm
+    monkeypatch.setattr(models, "tracer", lambda: Tracer(log_dir=str(tmp_path), enable_langfuse=False))
+    answers = iter([NS(usage=fake_resp(1000, 20).usage, choices=[NS(message=NS(content="ok"))]), RuntimeError("down")])
+
+    def fake_completion(**kw):
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    heard = []
+
+    def loud(info):
+        raise ValueError("a listener that breaks")
+    with models.on_call(heard.append), models.on_call(loud):
+        assert models.complete(model="deepseek-v4.1-flash", messages=[{"role": "user", "content": "q"}],
+                               name="made_up").text == "ok"
+        with pytest.raises(RuntimeError):
+            models.complete(model="deepseek-v4.1-flash", messages=[{"role": "user", "content": "q"}], name="made_up")
+    assert [(h["name"], h["model"], h["tokens_in"], h["tokens_out"], bool(h["error"])) for h in heard] == [
+        ("made_up", "deepseek-v4.1-flash", 1000, 20, False), ("made_up", "deepseek-v4.1-flash", 0, 0, True)]
+    assert heard[0]["usd"] > 0 and heard[1]["usd"] == 0.0
+    models._tell_call({"name": "later"})                     # not heard once the block ends
+    assert len(heard) == 2
+
+
 class FakeObs:
     def __init__(self, log, kw):
         self.log, self.kw = log, kw

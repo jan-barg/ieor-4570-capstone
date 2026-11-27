@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stringer · Hot right now</title>
+<meta name="description" content="One-minute videos of today's world news, with both sides shown.">
+<meta name="theme-color" content="#0A1033">
+<link rel="stylesheet" href="/static/feed/css/base.css">
+<link rel="stylesheet" href="/static/feed/css/front.css">
+</head>
+<body class="on-night grain-night">
+<a class="skip" href="#feed">Skip to the videos</a>
+
+<div class="app" id="app" data-tab="videos" data-lane="closed">
+  <header class="top">
+    <a class="wordmark" href="/" aria-label="Stringer, about the project"><span class="knot"></span>Stringer</a>
+    <p class="tagline caps">World news, explained, with the bias shown</p>
+    <div class="spacer"></div>
+    <div class="hot" aria-live="polite"><span class="caps">Hot right now</span><span class="pos" id="hot-pos"></span></div>
+    <div class="spacer"></div>
+    <button class="keys-btn" id="keys-btn" popovertarget="keys" aria-label="Keyboard shortcuts">
+      <svg class="icon icon-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><rect x="3" y="6.5" width="18" height="11" rx="2"/><path d="M7 10.5h.01M10 10.5h.01M13 10.5h.01M16 10.5h.01M8 14h8"/></svg><span class="t">Keys</span>
+    </button>
+    <div class="meter" id="meter-top" title="Videos made today, for the whole site. New ones from midnight, New York time.">
+      <span class="caps">Videos today</span><span class="dots" id="meter-dots"></span><span class="val" id="meter-val"></span>
+    </div>
+    <p class="credit credit-long">Events by <b>Monitor the Situation</b></p>
+    <nav class="tabs" role="tablist" aria-label="What to show">
+      <button role="tab" id="tab-videos" aria-selected="true" aria-controls="feed" data-tab="videos">Hot</button>
+      <button role="tab" id="tab-events" aria-selected="false" aria-controls="lane" data-tab="events">Events <span class="count" id="tab-count"></span></button>
+    </nav>
+    <button class="me" id="me-btn" popovertarget="menu-me" aria-label="Your account"><span class="initials" aria-hidden="true"></span></button>
+  </header>
+
+  <aside class="rail rail-story" id="rail-story" aria-label="This story"></aside>
+
+  <main class="feed" id="feed" tabindex="-1" aria-label="Hot right now: finished videos, freshest and biggest first"></main>
+
+  <aside class="rail rail-receipts on-night" id="rail-receipts" aria-label="How each side tells it"></aside>
+
+  <aside class="lane" id="lane" aria-label="Events from Monitor the Situation">
+    <button class="lane-strip" id="lane-strip" aria-expanded="false" aria-controls="lane-inner">
+      <span class="v">The news right now</span>
+      <span class="evdots" id="lane-dots" aria-hidden="true"></span>
+      <span class="ready-n" id="lane-ready"></span>
+    </button>
+    <div class="lane-inner" id="lane-inner">
+      <div class="lane-head">
+        <div class="row">
+          <h2 class="lane-title">The news right now</h2>
+          <button class="lane-close" id="lane-close" aria-label="Close the event list"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <p class="lane-credit">Events by <b>Monitor the Situation</b>. The biggest stories that can become a video.</p>
+        <div class="limits" id="limits"></div>
+        <p class="limit-note" id="limit-note" role="status"></p>
+      </div>
+      <ol class="events" id="events"></ol>
+      <p class="lane-foot">Stories are ranked by how many outlets report them, how fast that's growing and how recent they are. The list updates every few minutes.</p>
+    </div>
+  </aside>
+  <div class="lane-scrim" id="lane-scrim"></div>
+</div>
+
+<!-- receipts: a pull-up sheet on phones (the desktop shows the same thing in the right rail) -->
+<dialog class="sheet" id="dlg-receipts" aria-labelledby="rc-title">
+  <div class="sheet-card"><span class="grip"></span>
+    <button class="sheet-x" data-close aria-label="Close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div id="rc-sheet"></div>
+  </div>
+</dialog>
+
+<!-- the human check before money is spent -->
+<dialog class="sheet" id="dlg-confirm" aria-labelledby="cf-title">
+  <div class="sheet-card"><span class="grip"></span>
+    <button class="sheet-x" data-close aria-label="Close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div id="cf-body"></div>
+  </div>
+</dialog>
+
+<!-- report a video -->
+<dialog class="sheet" id="dlg-report" aria-labelledby="rp-title">
+  <div class="sheet-card"><span class="grip"></span>
+    <button class="sheet-x" data-close aria-label="Close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div id="rp-body"></div>
+  </div>
+</dialog>
+
+<!-- account -->
+<div id="menu-me" popover class="pop">
+  <div class="pop-card">
+    <div class="who"><span class="initials" aria-hidden="true"></span><div><b></b><span></span></div></div>
+    <ul>
+      <li><a href="/"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8h.01"/></svg>How Stringer works</a></li>
+      <li><button id="sign-out"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M14 4.5H6.5v15H14"/><path d="M10.5 12H20.5M17 8.5l3.5 3.5-3.5 3.5"/></svg>Sign out</button></li>
+    </ul>
+    <p class="fine">Signed in with your Columbia account. For now, only Columbia accounts can use Stringer.</p>
+  </div>
+</div>
+
+<div id="keys" popover class="pop">
+  <div class="pop-card">
+    <p class="caps">Keyboard</p>
+    <dl>
+      <dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>Previous or next story</dd>
+      <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>Earlier or later video of this story</dd>
+      <dt><kbd>Space</kbd></dt><dd>Play or pause</dd>
+      <dt><kbd>M</kbd></dt><dd>Sound on or off</dd>
+      <dt><kbd>E</kbd></dt><dd>Open the event list</dd>
+      <dt><kbd>R</kbd></dt><dd>Report this video</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="signedout paper" id="signedout" role="dialog" aria-modal="true" aria-labelledby="so-title">
+  <div class="card">
+    <a class="wordmark" href="/" style="color:var(--ink)"><span class="knot"></span>Stringer</a>
+    <h2 id="so-title">You're signed out.</h2>
+    <p>Stringer is open to Columbia accounts for now. Sign in with yours to watch and make videos.</p>
+    <button class="btn btn-ink btn-big" id="sign-in">Sign in with Columbia</button>
+  </div>
+</div>
+
+<script src="/static/feed/js/boot.js" data-load="STRINGER_DEMO=/api/site" data-scripts="/static/feed/js/common.js /static/feed/js/front.js"></script>
+</body>
+</html>

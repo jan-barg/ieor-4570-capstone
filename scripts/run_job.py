@@ -7,7 +7,8 @@ store at raw_events/<event id>.json. This picks up the Gate's ticket for that ev
 (stringer/pipeline.py) in a folder of its own, puts the video, poster and captions in the video bucket
 and the story's files in the private bucket, then finishes the ticket: done with the video's address
 on the website (/media/..., which streams it from the bucket), no video with the reason, or failed
-(a later click may try again)."""
+(a later click may try again). A run that ends with no video uploads its story files too (pipeline.json
+first), so the website's "See what happened" has something to show (module 9, Nov 27)."""
 from __future__ import annotations
 
 import os
@@ -24,8 +25,19 @@ PRIVATE_FILES = ("gather.json", "lens.json", "same_story.json", "balance.json", 
                  "facts.jsonl", "checked_story_file.json", "script.json", "pipeline.json")
 
 
+def upload_story(story: Path, event_id: str, ticket_id: str) -> list[str]:
+    """The story's own files (no articles) into the private bucket at stories/<event>/<ticket>/."""
+    pb = cloud.setting("STRINGER_PRIVATE_BUCKET")
+    sent = []
+    for f in PRIVATE_FILES:
+        if (story / f).exists():
+            cloud.upload(pb, f"stories/{safe_id(event_id)}/{ticket_id}/{f}", story / f, cache="no-store")
+            sent.append(f)
+    return sent
+
+
 def upload_outputs(story: Path, rec: dict, event_id: str, ticket_id: str) -> dict:
-    vb, pb = cloud.setting("STRINGER_VIDEO_BUCKET"), cloud.setting("STRINGER_PRIVATE_BUCKET")
+    vb = cloud.setting("STRINGER_VIDEO_BUCKET")
     base = f"videos/{safe_id(event_id)}/{ticket_id}"
     urls = {}
     out = Path(rec["video"]["mp4"]).parent
@@ -33,9 +45,7 @@ def upload_outputs(story: Path, rec: dict, event_id: str, ticket_id: str) -> dic
         if (out / f).exists():
             cloud.upload(vb, f"{base}/{f}", out / f, cache="private, max-age=3600")
             urls[f] = f"/media/{base}/{f}"
-    for f in PRIVATE_FILES:
-        if (story / f).exists():
-            cloud.upload(pb, f"stories/{safe_id(event_id)}/{ticket_id}/{f}", story / f, cache="no-store")
+    upload_story(story, event_id, ticket_id)
     return dict(url=urls.get("video.mp4"), poster=urls.get("poster.jpg"), captions=urls.get("captions.vtt"),
                 duration_s=rec["video"].get("duration_s"), seconds=rec.get("seconds"), usd=rec.get("usd"))
 
@@ -65,6 +75,10 @@ def main(argv=None) -> int:
         ticket.finish(error=repr(e))
         raise
     if rec["outcome"] != "done":
+        try:
+            upload_story(work / "stories" / event_id, event_id, ticket.id)
+        except Exception as e:                       # the run's outcome stands; only its files are missing
+            print(f"could not upload the story files: {e!r}")
         ticket.finish(no_video=rec["why"])
         print(f"no video: {rec['why']}")
         return 0

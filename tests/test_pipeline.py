@@ -154,3 +154,64 @@ def test_vertex_project_can_be_named_by_the_environment(monkeypatch):
     kw = models.call_kwargs(alias, [{"role": "user", "content": "hi"}])
     assert kw["vertex_project"] == "made-up-project"
     assert kw["extra_headers"]["x-goog-user-project"] == "made-up-project"
+
+
+# ---- live progress: a Gate ticket brings its own progress record (module 9) -------------------------------------
+
+class GateTicket(FakeTicket):
+    """A ticket like the Gate's: it knows its store, so the run writes progress/<event>/<ticket>.json."""
+
+    def __init__(self, store):
+        super().__init__()
+        self.id = "20261127T100000-made"
+        self.gate = type("G", (), {"store": store})()
+
+
+def progress_doc(store):
+    from stringer import progress
+    return store.get(progress.key_for(EVENT["id"], "20261127T100000-made"))[0]
+
+
+def test_a_gate_ticket_gets_live_progress(fakes, monkeypatch):
+    from stringer.gate import MemoryStore
+    store = MemoryStore()
+    real_pick = pipeline.pick.pick
+
+    def pick_with_a_call(arts, lens):                       # one model call, told the way models.complete tells it
+        models._tell_call({"step": "pick", "name": "pick", "model": "haiku-5-5", "usd": 0.001, "tokens_in": 10,
+                           "tokens_out": 5, "seconds": 0.2, "error": None})
+        return real_pick(arts, lens)
+    monkeypatch.setattr(pipeline.pick, "pick", pick_with_a_call)
+    rec = pipeline.run(EVENT, GateTicket(store), say=lambda *_: None, **fakes["dirs"])
+    doc = progress_doc(store)
+    assert rec["outcome"] == "done" and doc["state"] == "done" and doc["current"] is None
+    assert list(doc["steps"]) == ["sides", "gather", "same_story", "balance_pick", "story_file", "fact_check",
+                                  "script", "video"]
+    assert all(s["t1"] is not None and s["t1"] >= s["t0"] for s in doc["steps"].values())
+    assert [(c["step"], c["model"]) for c in doc["calls"]] == [("balance_pick", "haiku-5-5")]
+    assert doc["usd"] == pytest.approx(rec["usd"], abs=1e-4)
+    models._tell_call({"model": "after the run"})           # the listener is gone once the run ends
+    assert len(progress_doc(store)["calls"]) == 1
+
+
+def test_progress_of_a_run_that_stops(fakes):
+    from stringer.gate import MemoryStore
+    store = MemoryStore()
+    fakes["state"]["script"] = "no video"
+    pipeline.run(EVENT, GateTicket(store), say=lambda *_: None, **fakes["dirs"])
+    doc = progress_doc(store)
+    assert doc["state"] == "no_video" and "too few claims" in doc["why"] and "video" not in doc["steps"]
+
+
+def test_progress_of_a_run_that_crashes(fakes, monkeypatch):
+    from stringer.gate import MemoryStore
+    store = MemoryStore()
+
+    def broken(*a, **kw):
+        raise RuntimeError("made-up crash")
+    monkeypatch.setattr(pipeline.story_file, "build_story", broken)
+    with pytest.raises(RuntimeError):
+        pipeline.run(EVENT, GateTicket(store), say=lambda *_: None, **fakes["dirs"])
+    doc = progress_doc(store)
+    assert doc["state"] == "failed" and "made-up crash" in doc["why"]
+    assert "stopped_at" in doc["steps"]["story_file"] and doc["steps"]["story_file"]["t1"] is None

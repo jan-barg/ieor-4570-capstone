@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stringer · Admin</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#F3EEE1">
+<link rel="stylesheet" href="/static/feed/css/base.css">
+<link rel="stylesheet" href="/static/feed/css/admin.css">
+</head>
+<body class="on-paper grain-paper" data-locked="true">
+<a class="skip" href="#main">Skip to the review queue</a>
+
+<!-- ============ the lock screen ============ -->
+<div class="lock" id="lock">
+  <div class="lock-in">
+    <a class="wordmark" href="/"><span class="knot"></span>Stringer</a>
+    <div class="lock-grid">
+      <div class="lock-copy">
+        <p class="caps kicker">Admin</p>
+        <h1>The review desk.</h1>
+        <p class="lede">Check reports, decide on hidden videos and keep an eye on the money. Only Jan can open this page.</p>
+      </div>
+      <form class="lock-form" id="lock-form" autocomplete="off" novalidate>
+        <div class="field">
+          <label for="pw">Password</label>
+          <input id="pw" name="pw" type="password" autocomplete="current-password" aria-describedby="pw-help">
+          <p class="help" id="pw-help" aria-live="polite">The admin password for this site.</p>
+        </div>
+        <button class="btn btn-ink btn-big" type="submit">Unlock</button>
+        <div class="lock-foot">
+          <a class="linkish" href="/feed">Back to the site</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ============ the desk ============ -->
+<div class="desk" id="desk" data-tab="queue" inert>
+  <header class="ahead">
+    <a class="wordmark" href="/" aria-label="Stringer, about the project"><span class="knot"></span>Stringer</a>
+    <span class="pill pill-admin">Admin</span>
+    <p class="site-state" id="site-state" aria-live="polite"></p>
+    <div class="spacer"></div>
+    <a class="btn btn-ghost btn-sm view-site" href="/feed">View the site</a>
+    <span class="who"><span class="initials" aria-hidden="true">J</span><span class="who-name">Jan</span></span>
+    <button class="btn btn-line btn-sm" id="lock-btn" type="button"><span class="lock-ic"></span><span>Lock</span></button>
+  </header>
+
+  <div class="closed-band" id="closed-band" hidden>
+    <p><b>New videos are paused.</b> People can still watch everything. The event list says “New videos are paused right now.”</p>
+    <button class="btn btn-paper btn-sm" type="button" id="reopen">Open again</button>
+  </div>
+
+  <div class="dgrid" id="main">
+    <!-- status: left rail on wide screens, a strip on tablets, its own tab on phones -->
+    <aside class="panel status" id="p-status" aria-labelledby="status-title" data-panel="status">
+      <h2 class="caps sec" id="status-title">Site status</h2>
+      <div class="st-list" id="status"></div>
+    </aside>
+
+    <main class="center">
+      <section class="panel queue" id="p-queue" aria-labelledby="queue-title" data-panel="queue">
+        <div class="sec-row">
+          <h2 class="h2" id="queue-title">Waiting for you</h2>
+          <p class="q-count" id="q-count" aria-live="polite"></p>
+        </div>
+        <p class="q-dek">The first report on a video hides it until you look. Put it back up, take it down, or have it made again.</p>
+        <div class="q-list" id="queue"></div>
+      </section>
+
+      <section class="panel reports" id="p-reports" aria-labelledby="reports-title" data-panel="reports">
+        <div class="sec-row">
+          <h2 class="h2" id="reports-title">All reports</h2>
+          <p class="sec-meta" id="reports-meta"></p>
+        </div>
+        <div class="rep-table" id="reports" role="table" aria-label="Every report, newest first"></div>
+      </section>
+
+      <section class="panel videos" id="p-videos" aria-labelledby="videos-title" data-panel="videos">
+        <div class="sec-row">
+          <h2 class="h2" id="videos-title">All videos</h2>
+          <p class="sec-meta" id="videos-meta"></p>
+        </div>
+        <ul class="vid-list" id="videos"></ul>
+      </section>
+    </main>
+
+    <aside class="panel logcol" id="p-log" aria-labelledby="log-title" data-panel="log">
+      <div class="sec-row">
+        <h2 class="caps sec" id="log-title">The log</h2>
+        <p class="sec-meta">New York time</p>
+      </div>
+      <div class="log-filter" role="group" aria-label="Show in the log">
+        <button type="button" class="chip" aria-pressed="true" data-f="all">All</button>
+        <button type="button" class="chip" aria-pressed="false" data-f="reports">Reports</button>
+        <button type="button" class="chip" aria-pressed="false" data-f="videos">Videos</button>
+        <button type="button" class="chip" aria-pressed="false" data-f="jan">Yours</button>
+      </div>
+      <ol class="log" id="log" aria-live="polite"></ol>
+    </aside>
+  </div>
+
+  <nav class="tabbar" aria-label="Admin sections">
+    <button type="button" data-tab="queue" aria-current="page"><span class="tb-ic" data-ic="flag"></span><span>Queue</span><b class="tb-badge" id="tb-badge"></b></button>
+    <button type="button" data-tab="reports"><span class="tb-ic" data-ic="receipt"></span><span>Reports</span></button>
+    <button type="button" data-tab="videos"><span class="tb-ic" data-ic="list"></span><span>Videos</span></button>
+    <button type="button" data-tab="log"><span class="tb-ic" data-ic="clock"></span><span>Log</span></button>
+    <button type="button" data-tab="status"><span class="tb-ic" data-ic="gauge"></span><span>Status</span></button>
+  </nav>
+</div>
+
+<!-- confirm dialogs: take down, remake, pause the site -->
+<dialog class="sheet" id="dlg" aria-labelledby="dlg-title">
+  <form method="dialog" class="sheet-card" id="dlg-card"></form>
+</dialog>
+
+<script src="/static/feed/js/boot.js" data-scripts="/static/feed/js/common.js /static/feed/js/admin.js"></script>
+</body>
+</html>
