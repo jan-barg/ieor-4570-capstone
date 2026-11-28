@@ -2,6 +2,7 @@
 model, made-up events and story files, and a stand-in pipeline. Nothing here is real news."""
 from __future__ import annotations
 
+import datetime as dt
 import gzip
 import json
 import os
@@ -458,3 +459,43 @@ def test_on_cloud_run_no_background_thread_refreshes_the_list(monkeypatch):
     monkeypatch.setattr(server, "Gate", lambda **kw: Gate(MemoryStore(), complete=None, model=""))
     server.main(["--port", "0", "--no-model"])
     assert "keep_fresh" not in started and "geo" in started
+
+
+# ---- hot ranking and story chains (Nov 27) -------------------------------------------------------------------
+
+def feed_event(n: int, hours_ago: float, reports: int = 9, country: str = "Freedonia") -> dict:
+    """A made-up eligible feed event whose reports all came in `hours_ago` (its first and newest report)."""
+    t = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours_ago)).isoformat().replace("+00:00", "Z")
+    return dict(EVENT, id=f"00000000-0000-4000-8000-{n:012d}", title=f"Made-up event {n}", country=country,
+                report_count=reports, created_at=t,
+                sources=[{"url": f"https://example.org/{n}/{i}", "published_at": t} for i in range(reports)])
+
+
+def test_the_front_page_ranks_events_and_groups_a_chain(monkeypatch, tmp_path):
+    early, late, other, mk = feed_event(1, 30), feed_event(2, 3), feed_event(3, 1, country="Sylvania"), feed_event(4, 2)
+    extra = [feed_event(10 + i, 1 + i / 10, reports=30, country=f"Country {i}") for i in range(10)]   # hotter
+    g = Gate(MemoryStore(), complete=None, model="", tavily_left=lambda: 500)
+    feed = [early, late, other, mk] + extra
+    s = server.Site(gate=g, fetch=lambda: feed, files=D.Files(local=tmp_path / "stories"))
+    for i, e in enumerate((early, late, other)):
+        g.store.put(f"raw_events/{e['id']}.json", e, None)
+        g.start(e, f"maker-{i}").ticket.finish(video={"duration_s": 60.0, "seconds": 200.0, "usd": 0.2})
+    g.store.put(f"raw_events/{mk['id']}.json", mk, None)
+    assert g.start(mk, "maker-9").ok                         # a follow-up still being made
+    g.join_chain(late["id"], [early["id"]])
+    g.join_chain(mk["id"], [early["id"]])
+    s.refresh()
+    f = s.front("visitor-1")
+    leads = []
+    for v in f["videos"]:
+        if v["chain"] not in {x["chain"] for x in leads}:
+            leads.append(v)
+    assert [v["id"] for v in leads] == [other["id"], late["id"]]        # one story per chain, hottest first
+    parts = f["chains"][early["id"]]
+    assert [p["id"] for p in parts] == [early["id"], late["id"], mk["id"]] and parts[-1]["kind"] == "making"
+    assert other["id"] not in f["chains"]                                # a story of one video
+    ids = [e["id"] for e in f["events"]]
+    assert len(ids) == 11 and mk["id"] in ids                            # the top 10, plus the run being made
+    assert early["id"] not in ids                                        # its chain shows its newest event
+    freedonia = [e for e in f["events"] if e["country"] == "Freedonia"]
+    assert len(freedonia) <= 3

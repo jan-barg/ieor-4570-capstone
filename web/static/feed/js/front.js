@@ -26,8 +26,9 @@
   const evById = (id) => state.events.find((e) => e.id === id);
   const videoById = (id) => (D.videos || []).find((v) => v.id === id);
 
-  // One story per video for now; D.chains (follow-ups of one story, oldest first) is empty until the
-  // follow-up step is built, but the chain code below is the design's and works when it fills in.
+  // One story per chain: D.chains lists a chain's videos oldest first (a follow-up being made is a "making"
+  // part), and D.videos has every video, hot-ranked, each story's lead (its newest event) first. A video
+  // with no chains{} entry is a story of one.
   function partOf(c, i, n) {
     const making = c.kind === 'making' || c.state === 'making';
     return { ...c, part: i + 1, of: n, kind: making ? 'making' : 'video', start: 0 };
@@ -37,7 +38,13 @@
     const parts = chain && chain.length ? chain.map((c, i) => partOf(c, i, chain.length)) : [partOf(v, 0, 1)];
     return { key: v.chain || v.id, lead: v, parts, at: Math.max(0, parts.findIndex((p) => p.id === v.id)), event: v.event };
   }
-  const stories = (D.videos || []).filter((v) => !v.hidden).map(storyOf);
+  const seenChains = new Set();
+  const stories = (D.videos || []).filter((v) => {
+    const k = v.chain || v.id;
+    if (v.hidden || seenChains.has(k)) return false;
+    seenChains.add(k);
+    return true;
+  }).map(storyOf);
   const empty = () => stories.length === 0;
 
   const stepIndex = (key) => Math.max(0, D.steps.findIndex((s) => s.key === key));

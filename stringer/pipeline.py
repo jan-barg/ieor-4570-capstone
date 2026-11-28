@@ -10,6 +10,10 @@ and Tavily and ElevenLabs credits are priced from config/gate.toml and the Start
 ends, its spend goes to the ticket (which also tells the Gate the video is alive), and after the
 searches the ticket checks the rest will fit under the $5 cap before the dear steps start.
 
+The follow-up check (stringer/followup.py) runs in its own thread from the start, beside the sides step: is
+this event another step of a story that already has a video? A match joins that story's chain on the front
+page; it never waits the run, and a failure there never stops the video. Its result is rec["follow_up"].
+
 Two things run beside others instead of after them (Nov 27, for the 5 minutes a viewer waits): the last
 Story File calls (story_file.build_story's lanes), and the fact check's model, which starts as soon as
 the claims are final and so finishes during the Story File step. Its seconds are in the story_file row;
@@ -48,7 +52,7 @@ import time
 from pathlib import Path
 
 from . import fact_check, lens as lens_step, models, outlets, paths, pick, same_story, story_file, tracing
-from . import balance
+from . import balance, followup
 from . import progress as progress_mod
 from . import script_writer as sw
 from .events import from_live
@@ -118,6 +122,43 @@ def _script_step(name: str | None) -> str:
     return sw.LINE_STEP if n.startswith("script line") else sw.WORDS_STEP if n.startswith("script words") else "script"
 
 
+
+FOLLOWUP_WAIT_S = 60          # the check normally ends during the sides step (one ~6 s call); never wait longer
+
+
+def _start_followup(raw_event: dict, ticket, tid, event_id: str, say):
+    """Starts the follow-up check in its own thread when the run has a Gate (it reads and writes the Gate's
+    records). Returns (thread, result box) or None."""
+    gate = getattr(ticket, "gate", None) if ticket is not None else None
+    if gate is None:
+        return None
+    box: dict = {}
+    complete = lens_step.live_complete("same_story", trace_id=tid, metadata={"event": event_id, "part": "follow_up"})
+
+    def work():
+        try:
+            box["out"] = followup.check(raw_event, gate, complete)
+        except Exception as e:                      # grouping is a nicety: the video goes on without it
+            box["out"] = {"error": f"{type(e).__name__}: {e}"[:300]}
+    t = threading.Thread(target=work, name="follow-up", daemon=True)
+    t.start()
+    return t, box
+
+
+def _end_followup(follow, say, wait: float = FOLLOWUP_WAIT_S) -> dict | None:
+    if follow is None:
+        return None
+    t, box = follow
+    t.join(wait)
+    out = box.get("out") or {"error": f"still running after {wait:.0f} s"}
+    if out.get("error"):
+        say(f"  follow-up    {out['error']}"[:200])
+    else:
+        say(f"  follow-up    {out.get('seconds', 0):>6.1f} s  candidates {out.get('candidates')}  "
+            f"matches {len(out.get('matches') or [])}  chain {out.get('chain') or '-'}")
+    return out
+
+
 def run(raw_event: dict, ticket=None, *, stories_dir: Path | None = None, raw_dir: Path | None = None,
         tavily_limit: float = TAVILY_LIMIT, voice_engine=None, music: Path | None = None, render: bool = True,
         progress=None, say=print) -> dict:
@@ -182,9 +223,14 @@ def run(raw_event: dict, ticket=None, *, stories_dir: Path | None = None, raw_di
             P.finish(outcome, why or None, seconds=rec["seconds"], usd=rec["usd"])
         return rec
 
+    follow = None
     watch = models.on_call(P.call) if P is not None else contextlib.nullcontext()
     try:
         with models.on_cost(meter), models.live_timeouts(), watch:
+            # the follow-up check (stringer/followup.py): one model call beside the sides step, never a wait.
+            # Is this event another step of a story that already has a video? A match joins its story chain.
+            follow = _start_followup(raw_event, ticket, tid, ev.id, say)
+
             # module 4's lens: which two camps of outlets the video compares (or none)
             t0 = begin("sides")
             table = outlets.table()
@@ -207,6 +253,7 @@ def run(raw_event: dict, ticket=None, *, stories_dir: Path | None = None, raw_di
             d = store.story_dir(ev.id)
             folder["d"] = d
             _write_json(d / "lens.json", lens_rec)
+            rec["follow_up"] = _end_followup(follow, say)
             credits = tv.ledger.spent
             done("gather", t0, extra_usd=credits * price, articles=meta["counts"]["articles"], tavily_credits=credits,
                  query_writer=(meta.get("queries") or {}).get("writer"))
@@ -316,6 +363,8 @@ def run(raw_event: dict, ticket=None, *, stories_dir: Path | None = None, raw_di
         finish("no_video" if too_costly else "failed", (f"too costly: {e}" if too_costly else repr(e))[:500])
         raise
     finally:
+        if follow is not None and rec.get("follow_up") is None:
+            rec["follow_up"] = _end_followup(follow, say, wait=0)
         paths.STORIES, paths.RAW = before_paths
         tr.end_trace(tid, output={k: rec.get(k) for k in ("outcome", "why", "video", "seconds", "usd", "model_calls")},
                      error=rec.get("why") if rec.get("outcome") == "failed" else None)

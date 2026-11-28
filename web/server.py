@@ -47,7 +47,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from stringer import cloud, feed, paths, pipeline
+from stringer import cloud, feed, hot, paths, pipeline
 from stringer import progress as prog
 from stringer.gate import MESSAGES, Gate, TooCostly, VideoOverBudget
 from stringer.gate.core import safe_id
@@ -93,6 +93,7 @@ class Site:
         self.refreshing = threading.Lock()
         self._receipts: dict = {}
         self._runs: dict = {}                       # finished runs' progress views never change
+        self._raws: dict = {}                       # raw events read from the store (saved at the click)
         self._geo: tuple[bytes, bytes] | None = None
         self._geo_lock = threading.Lock()
         self._watch: dict[str, tuple[float, bool]] = {}   # /media answers, kept 30 s (a player asks in pieces)
@@ -278,13 +279,16 @@ class Site:
 
     def raw_event(self, eid: str) -> dict:
         with self.lock:
-            e = self.events.get(eid)
+            e = self.events.get(eid) or self._raws.get(eid)
         if e:
             return e
         try:
             r, _ = self.gate.store.get(f"raw_events/{safe_id(eid)}.json")
         except Exception:
             r = None
+        if r:
+            with self.lock:                           # saved once, at the click: it never changes
+                self._raws[eid] = r
         return r or {}
 
     def video_row(self, eid: str, rec: dict, now: dt.datetime) -> dict | None:
@@ -321,6 +325,52 @@ class Site:
             "captions": urls.get("captions"), "reported": bool(rec.get("reports")), "keptUp": bool(rec.get("keep_up")),
             "hidden": bool(rec.get("hidden")),
         }
+
+    def video_feed(self, records: dict, now: dt.datetime) -> tuple[list[dict], dict]:
+        """The finished videos for "Hot right now", and the story chains (module 9; Nov 27).
+
+        A chain is the events the follow-up check joined (the record's `chain`; stringer/followup.py).
+        Each story is led by its newest event's video, and stories are ranked by that event's hot score
+        (stringer/hot.py), with a fourth-or-later story from one country moved down, not dropped. videos[]
+        keeps every video, each story's lead first; chains{} lists a chain's parts oldest first, with a
+        follow-up still being made as a "making" part. A story of one video has no chains{} entry."""
+        raws: dict = {}
+        by_chain: dict = {}
+        for eid, rec in records.items():
+            if rec.get("state") == "done" and rec.get("video") and not rec.get("hidden"):
+                v = self.video_row(eid, rec, now)
+                if v:
+                    v["chain"] = rec.get("chain") or eid
+                    raws[eid] = self.raw_event(eid)
+                    by_chain.setdefault(v["chain"], []).append(v)
+
+        def start(eid: str) -> str:
+            e = raws.get(eid) or {}
+            times = hot.report_times(e, now)
+            t = times[0] if times else D.parse(e.get("created_at"))
+            return D.iso(t) if t else ""
+        making: dict = {}
+        for eid, rec in records.items():
+            if rec.get("state") == "making" and rec.get("chain") in by_chain and not rec.get("hidden"):
+                raws[eid] = raw = self.raw_event(eid)
+                making.setdefault(rec["chain"], []).append(
+                    {"id": eid, "event": eid, "kind": "making", "state": "making", "chain": rec["chain"],
+                     "headline": rec.get("title") or raw.get("title") or "", "subtype": raw.get("subtype") or "",
+                     "country": raw.get("country") or ""})
+        for parts in by_chain.values():
+            parts.sort(key=lambda v: start(v["id"]))
+        leads = hot.rank([parts[-1] for parts in by_chain.values()], now, event_of=lambda v: raws.get(v["id"]) or {},
+                         top=None, drop=False)
+        videos = []
+        for lead in leads:
+            videos.append(lead)
+            videos += [v for v in by_chain[lead["chain"]] if v is not lead]
+        chains = {}
+        for key, parts in by_chain.items():
+            allp = parts + making.get(key, [])
+            if len(allp) > 1:
+                chains[key] = sorted(allp, key=lambda p: start(p["id"]))
+        return videos, chains
 
     def visitor_user(self, visitor: str, email: str | None) -> dict:
         if email:
@@ -423,6 +473,8 @@ class Site:
             rec = records.get(eid) or {}
             if state == "making" or rec.get("state") == "making":
                 rec = self.get_record(eid)
+                if rec:
+                    records[eid] = rec               # newer than the list's copy; it may carry a new chain
             if rec:                                  # the record is newer than the list (made every 5 minutes)
                 state = self.row_state(rec, state)
             row = {"id": eid, "title": e.get("title") or "", "category": e.get("category") or "",
@@ -448,14 +500,12 @@ class Site:
                 row["progress"] = {"step": step or "sides", "pct": pct, "ticket": t.get("id"),
                                    "startedAgo": D.ago(started, now).replace(" ago", "") if started else "",
                                    "started": t.get("started"), "by": "you" if t.get("visitor") == vkey else "another student"}
-            events.append(row)
-        videos = []
-        for eid, rec in records.items():
-            if rec.get("state") == "done" and rec.get("video") and not rec.get("hidden"):
-                v = self.video_row(eid, rec, now)
-                if v:
-                    videos.append(v)
-        videos.sort(key=lambda v: v.get("made") or "", reverse=True)       # newest first (hot ranking: later)
+            events.append((row, e))
+        # the top 10 by hot score, one per story chain, at most 3 from a country; a run being made always shows
+        events = [r for r, _ in hot.rank(events, now, event_of=lambda t: t[1],
+                                         chain_of=lambda t: (records.get(t[0]["id"]) or {}).get("chain"),
+                                         keep=lambda t: t[0]["state"] == "making")]
+        videos, chains = self.video_feed(records, now)
         msgs = dict(MESSAGES, unavailable=MESSAGES["no_video"], report_thanks="Thanks. We'll take a look.")
         lim = self.gate.lim
         msgs.update(day_full=MESSAGES["day_full"].format(n=lim["videos_per_day"]),
@@ -464,7 +514,7 @@ class Site:
             "now": D.iso(now), "user": self.visitor_user(visitor, email), "credit": D.CREDIT,
             "site": self.site_numbers(visitor), "steps": D.steps_list(), "gateMessages": msgs,
             "reportReasons": [{"key": k, "label": D.REASON_LABELS.get(k, k)} for k in self.gate.rep["reasons"]],
-            "videos": videos, "chains": {}, "events": events,
+            "videos": videos, "chains": chains, "events": events,
             "listUpdated": D.iso(dt.datetime.fromtimestamp(updated, dt.timezone.utc)) if updated else None,
             "listError": bool(err),
         }

@@ -594,6 +594,38 @@ class Gate:
                      hidden_by=None, keep_up=False, reports_since_review=0)
         return self._admin_set(event_id, "remake", by, note, change)
 
+    def join_chain(self, event_id: str, matched: list[str]) -> str | None:
+        """Put an event in one story chain with the events the follow-up check matched (stringer/followup.py;
+        `matched` oldest first). The chain's id is the oldest match's chain, or that event's own id, so a chain
+        keeps its id as it grows. Matches that sit in different chains join them: every record of the other
+        chains is pointed at the one id. The front page groups videos by this field. Returns the chain id."""
+        eid = safe_id(event_id)
+        matched = [m for m in dict.fromkeys(safe_id(m) for m in matched if m) if m != eid]
+        if not matched:
+            return None
+        recs = {m: (self.store.get(self._ekey(m))[0] or {}) for m in matched}
+        cid = recs[matched[0]].get("chain") or matched[0]
+        others = {recs[m].get("chain") or m for m in matched} - {cid}
+        keys = {self._ekey(eid)} | {self._ekey(m) for m in matched}
+        if others:
+            for k in self.store.list("events/"):
+                r, _ = self.store.get(k)
+                if r and r.get("chain") in others:
+                    keys.add(k)
+
+        own = self._ekey(eid)
+
+        def point(cur, k):
+            if (cur is None and k != own) or (cur is not None and cur.get("chain") == cid):
+                return NO_CHANGE, False
+            cur = cur or {"id": eid}
+            cur["chain"] = cid
+            return cur, True
+        for k in sorted(keys):
+            self.store.update(k, lambda cur, k=k: point(cur, k))
+        self._log("chain", eid, chain=cid, matched=matched)
+        return cid
+
     def reports(self, event_id: str | None = None) -> list[dict]:
         keys = self.store.list(f"reports/{safe_id(event_id)}/" if event_id else "reports/")
         return sorted((self.store.get(k)[0] for k in keys), key=lambda r: r["at"], reverse=True)
