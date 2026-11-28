@@ -32,9 +32,10 @@ function begin(ctx, seed, top = 0.32) {
   ctx.scale(K, K);
 }
 
+// (with an animation, s.compact, the window draws the "Source:" label over its corner instead: anim.js)
 function end(ctx, s, {chip = true} = {}) {
   aiMark(ctx, false);
-  if (chip) sourceChip(ctx, s.beat.label, s.t);
+  if (chip && !s.compact) sourceChip(ctx, s.beat.label, s.t);
   ctx.restore();
 }
 
@@ -57,12 +58,16 @@ export function drawBigNumber(ctx, s) {
 
   // measure
   const unitLines = wrapCaps(ctx, bl.unit, W_TEXT, {size: 11}).slice(0, 2);
-  const {size, lines} = fit(ctx, value, {maxWidth: W_TEXT, maxLines: 2, max: value.length <= 4 ? 132 : 96, min: 40});
+  // with an animation (s.compact) the figure keeps to the top, smaller, and the window takes the room below
+  // (an animated beat never has a comparison: stringer/animation/steps.py leaves those beats their full card)
+  const big = s.compact ? 64 : value.length <= 4 ? 132 : 96;
+  const {size, lines} = fit(ctx, value, {maxWidth: W_TEXT, maxLines: 2, max: big, min: s.compact ? 34 : 40});
   ctx.font = `italic 400 19px ${SERIF}`;
   const labelLines = label ? wrap(ctx, label, W_TEXT).slice(0, 2) : [];
   const vh = size * 0.78 + (lines.length - 1) * size * 1.0;
   const h = unitLines.length * 14 + 14 + vh + 22 + labelLines.length * 23 + (withCompare ? 84 : 0);
-  let y = centred(h);
+  let y = s.compact ? TOP : centred(h);
+  if (s.compact) s.textEnd = TOP + h + 4;            // the label's last baseline is at TOP + h - 5; its descenders
 
   ctx.globalAlpha = clamp01(t / 8);
   unitLines.forEach((u, i) => smallCaps(ctx, u, L.left, y + 10 + i * 14, {size: 11}));
@@ -262,7 +267,9 @@ export function drawDocument(ctx, s) {
   const {beat, t} = s;
   const bl = beat.blanks || {};
   begin(ctx, 47, 0.34);
-  const x = L.left + 6, w = W_TEXT - 12, y = L.content + 4, h = BOTTOM - L.content - 4;
+  // with an animation (s.compact) the sheet is a short slip at the top and the window takes the room below
+  const x = L.left + 6, w = W_TEXT - 12, y = L.content + 4, h = s.compact ? 108 : BOTTOM - L.content - 4;
+  if (s.compact) s.textEnd = y + h + 5;
   const slide = easeOut(t / 10);
   ctx.save();
   ctx.translate(0, (1 - slide) * 20);
@@ -273,14 +280,14 @@ export function drawDocument(ctx, s) {
   ctx.beginPath(); ctx.roundRect(x, y, w, h, 3); ctx.fill();
   const kind = bl.doc_kind && bl.doc_kind !== 'other' ? bl.doc_kind : '';
   if (kind) smallCaps(ctx, kind, x + 16, y + 26, {size: 9.5, color: PAL.tag});
-  const {size, lines} = fit(ctx, bl.title || '', {maxWidth: w - 32, maxLines: 3, max: 26, min: 16});
+  const {size, lines} = fit(ctx, bl.title || '', {maxWidth: w - 32, maxLines: s.compact ? 2 : 3, max: s.compact ? 21 : 26, min: 16});
   drawDecodingText(ctx, lines, {x: x + 16, y: y + 36 + size, size, lineHeight: size * 1.18, font: `400 ${size}px ${SERIF}`,
     color: PAL.ink, revealed: Math.max(0, Math.floor((t - 6) / 1.1)), frame: s.frame});
   let ly = y + 36 + size + (lines.length - 1) * size * 1.18 + 18;
   if (bl.issued_by) {
     ctx.font = `500 11px ${SANS}`;
     ctx.fillStyle = PAL.inkSoft;
-    wrap(ctx, bl.issued_by, w - 32).slice(0, 2).forEach((l, i) => ctx.fillText(l, x + 16, ly + i * 14));
+    wrap(ctx, bl.issued_by, w - 32).slice(0, s.compact ? 1 : 2).forEach((l, i) => ctx.fillText(l, x + 16, ly + i * 14));
     ly += 32;
   }
   // grey lines of "text", made of dots
@@ -295,7 +302,22 @@ export function drawDocument(ctx, s) {
   const mk = marksOf(beat, 'stamp')[0];
   const at = mk ? mk.start : Math.round(beat.frames * 0.55);
   const p = clamp01((t - at) / 5);
-  if (p > 0) {
+  if (s.compact) {
+    // the short slip has no room for a stamp (Nov 28: a seal there sat on the issuer's name): the outcome appears
+    // in small capitals at the right of the slip's top line instead, on the same word, and a plain seal is left out
+    if (p > 0 && bl.outcome) {
+      const label = String(bl.outcome).toUpperCase();
+      ctx.save();
+      ctx.font = `600 9.5px ${SANS}`;
+      const room = w - 32 - (kind ? ctx.measureText(kind.toUpperCase()).width + kind.length * 0.9 + 14 : 0);
+      let fs = 9.5;
+      const width = () => { ctx.font = `600 ${fs}px ${SANS}`; return ctx.measureText(label).width + label.length * 0.9; };
+      while (fs > 6.5 && width() > room) fs -= 0.5;
+      ctx.globalAlpha = p;
+      smallCaps(ctx, label, x + w - 16, y + 26, {size: fs, color: PAL.tag, align: 'right'});
+      ctx.restore();
+    }
+  } else if (p > 0) {
     const sc = 1 + 0.6 * (1 - easeOut(p));
     ctx.save();
     ctx.translate(x + w * 0.5, y + h * 0.7);
@@ -337,8 +359,11 @@ export function drawTally(ctx, s) {
   const total = parseValue(bl.total);
   const nums = vals.map((v) => (v ? v.n + v.decimals : 0));
   const scale = Math.max(1, ...nums, total ? total.n + total.decimals : 0) * 1.08;
-  const rowH = Math.min(76, (BOTTOM - TOP - 30) / Math.max(1, rows.length));
-  const y0 = centred(rows.length * rowH + (total ? 18 : 0)) + 28;
+  // with an animation (s.compact; at most 3 rows, stringer/animation/steps.py) the rows keep to the top, closer,
+  // with room between a bar and the next label (3 rows and a total still leave the window its least height)
+  const rowH = s.compact ? (rows.length > 2 ? 40 : 44) : Math.min(76, (BOTTOM - TOP - 30) / Math.max(1, rows.length));
+  const y0 = s.compact ? TOP + 18 : centred(rows.length * rowH + (total ? 18 : 0)) + 28;
+  if (s.compact) s.textEnd = y0 + (rows.length - 1) * rowH + 30 + (total ? 18 : 0);
   const times = rows.map((_, k) => slot(beat, marks, k, rows.length));
   rows.forEach((row, k) => {
     const m = times[k];

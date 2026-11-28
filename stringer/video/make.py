@@ -5,6 +5,9 @@
 
 A narration longer than 72 s (with the 1.5 s hold) is not read again: the same recording is played
 up to 12% faster (free; a second reading cost the credits again and came out no shorter, Nov 26).
+With the custom animation on (stringer/animation/, off by default), one beat gets a model-drawn animation in a
+window under its words: once the script is checked, its storyboard picks the beat and its drawing and cue words
+run beside the voice; its frames are drawn once the voice is recorded. Off, nothing changes.
 The record says what happened at each step, how long it took and what the voice cost. The steps join
 the Langfuse trace given as trace_id (the live pipeline's, one per video); render.json keeps its id.
 """
@@ -15,8 +18,8 @@ import shutil
 import time
 from pathlib import Path
 
-from .. import fact_check, paths, script_writer as sw, story_file, tracing
-from . import check, direct, files, plan, render as render_step, voice
+from .. import animation, fact_check, paths, script_writer as sw, story_file, tracing
+from . import check, direct, files, plan, render as render_step, transitions as tx, voice
 
 MAX_SECONDS = 72.0
 FIT_MARGIN = 0.3       # a sped-up video aims this far under MAX_SECONDS
@@ -25,14 +28,19 @@ FIT_MARGIN = 0.3       # a sped-up video aims this far under MAX_SECONDS
 MUSIC = paths.PRIVATE / "video_assets" / "music" / "clean-reportage.mp3"
 
 
-def inputs(story_dir: Path) -> tuple[dict, dict, dict]:
-    """script.json (with today's credits and sources card), the checked story file and module 7's packet (for the on-screen check)."""
-    script = json.loads((story_dir / "script.json").read_text(encoding="utf-8"))
+def packet7(story_dir: Path) -> tuple[dict, dict]:
+    """The checked story file and module 7's packet (what the writer reads; the animation's storyboard reads it too)."""
     facts, _ = story_file.read(story_dir)
     sf = fact_check.read_checked(story_dir)
     arts = fact_check.read_articles(story_dir)
     arts = {a["id"]: a for a in arts} if isinstance(arts, list) else arts
-    p7 = sw.packet(sf, facts, sw.contexts_for(facts, arts))
+    return sf, sw.packet(sf, facts, sw.contexts_for(facts, arts))
+
+
+def inputs(story_dir: Path) -> tuple[dict, dict, dict]:
+    """script.json (with today's credits and sources card), the checked story file and module 7's packet (for the on-screen check)."""
+    script = json.loads((story_dir / "script.json").read_text(encoding="utf-8"))
+    sf, p7 = packet7(story_dir)
     # code-made, so an older script gets today's credits and sources card
     script = dict(script, credits=sw.credits(sf, p7))
     if script.get("sources_card"):
@@ -40,20 +48,33 @@ def inputs(story_dir: Path) -> tuple[dict, dict, dict]:
     return script, sf, p7
 
 
+def start_animation(story_dir: Path, *, trace_id: str | None = None, **kw):
+    """The custom animation's job for this story, from the checked story file (prepare gives it the beats)."""
+    _, p7 = packet7(story_dir)
+    return animation.start(p7["text"], list(p7["claims"]), trace_id=trace_id, **kw)
+
+
 def prepare(story_dir: Path, engine, out_dir: Path, *, voice_cache: Path | None = None, music: Path | None = None,
-            direction: bool = True, complete=None, trace_id: str | None = None) -> dict:
+            direction: bool = True, complete=None, trace_id: str | None = None, anim=None,
+            transitions: str = "off") -> dict:
     """Steps 1-4. Writes out_dir/plan.json and out_dir/narration.mp3 (and the music bed, if any).
-    The voice director runs first (direct.py) when the voice reads tags; direction=False skips it."""
+    The voice director runs first (direct.py) when the voice reads tags; direction=False skips it.
+    anim: the custom animation's job (animation.Job, not yet placed), True to start one here, or None/False.
+    transitions: how beats give way to each other (transitions.py), "off" by default."""
     t0 = time.time()
     if complete is None and trace_id:
         complete = lambda messages, name=None, model=None, **p: direct.model_call(      # noqa: E731
             messages, name=name, model=model, trace_id=trace_id, **p)
     script, sf, p7 = inputs(story_dir)
+    if anim is True:
+        anim = animation.start(p7["text"], list(p7["claims"]), trace_id=trace_id)
     rec: dict = dict(story=story_dir.name, status="", steps={})
     res = check.check_script(script, p7)
     rec["steps"]["check"] = dict(seconds=round(time.time() - t0, 2), swaps=res["swaps"], stop=res["stop"])
     if res["stop"]:
         return dict(rec, status="stopped", why=res["stop"])
+    if anim:
+        anim.place(res["beats"])        # the animation's storyboard, drawing and cue words, beside the voice
     directed = None
     if direction and getattr(engine, "tags", False):
         td = time.time()
@@ -82,26 +103,40 @@ def prepare(story_dir: Path, engine, out_dir: Path, *, voice_cache: Path | None 
     shutil.copyfile(narr["audio"], out_dir / "narration.mp3")
     if music:
         shutil.copyfile(music, out_dir / Path(music).name)
-    pl = plan.build(res["beats"], narr, script, sf["event"], swaps=res["swaps"], music=Path(music).name if music else None, p7=p7)
+    window = None
+    if anim:
+        ta = time.time()
+        window = anim.finish(narr, out_dir)          # None: the beat keeps its normal shot (out_dir/animation.json says why)
+        rec["steps"]["animation"] = dict(seconds=round(time.time() - ta, 2), **animation.summary(anim.rec))
+    pl = plan.build(res["beats"], narr, script, sf["event"], swaps=res["swaps"], music=Path(music).name if music else None,
+                    p7=p7, anim=window, **({"transitions": transitions} if transitions != "off" else {}))
     (out_dir / "plan.json").write_text(json.dumps(pl, ensure_ascii=False), encoding="utf-8")
     rec["steps"]["plan"] = dict(seconds=round(time.time() - t2, 2), frames=pl["frames"], beats=len(pl["beats"]),
-                                swaps=pl["swaps"], captions=len(pl["captions"]))
+                                swaps=pl["swaps"], captions=len(pl["captions"]),
+                                **({"transitions": pl["transitions"]} if pl.get("transitions") else {}))
     return dict(rec, status="planned", plan=str(out_dir / "plan.json"), out_dir=str(out_dir))
 
 
 def make(story_dir: Path, engine=None, out_dir: Path | None = None, *, music: Path | None = None,
          render: bool = True, extra: list[str] = (), trace: bool = True, direction: bool = True, complete=None,
-         trace_id: str | None = None) -> dict:
+         trace_id: str | None = None, anim=None, transitions: str | None = None) -> dict:
     """The whole module for one story: plan, MP4, loudness, poster, captions files and render.json.
     Each step's time goes to the local call log and Langfuse, into the trace `trace_id` when one is given
-    (the live pipeline's trace for this video), else into a trace of this module's own."""
+    (the live pipeline's trace for this video), else into a trace of this module's own.
+    anim: the custom animation's job, True to start one here, None to follow the switch (STRINGER_ANIMATION),
+    or False to keep it off.
+    transitions: how beats give way to each other (transitions.py); None follows STRINGER_TRANSITIONS (the mix unless
+    it is "off")."""
     engine = engine or voice.ElevenLabs()
     out_dir = Path(out_dir or story_dir / "video")
     started = time.time()
     if trace and not trace_id:
         trace_id = tracing.tracer().new_trace(f"video:{story_dir.name[:8]}", metadata=dict(module=8))
+    if anim is None:
+        anim = animation.enabled()
+    how = tx.style(transitions)
     rec = prepare(story_dir, engine, out_dir, music=music, direction=direction, complete=complete,
-                  trace_id=trace_id if trace else None)
+                  trace_id=trace_id if trace else None, anim=anim, **({"transitions": how} if how != "off" else {}))
     if trace:
         rec["trace_id"] = trace_id
     if rec["status"] == "planned" and render:

@@ -5,8 +5,8 @@
 //   node render.mjs stills <plan.json> <run folder> <out folder> [--frames 10,200|auto]
 //   node render.mjs bundle                                     (bundle once, into .bundle/)
 //
-// <run folder> holds the plan's audio files (narration.mp3, the music bed). They and the beats' portrait photos (and cutouts)
-// are copied next to the bundle into a folder of this render's own (public/run-<id>/, removed afterwards), so
+// <run folder> holds the plan's audio files (narration.mp3, the music bed) and an animated beat's frames (anim/). They and
+// the beats' portrait photos (and cutouts) are copied next to the bundle into a folder of this render's own (public/run-<id>/, removed afterwards), so
 // two renders at once never touch each other's files. Prints one JSON line at the end.
 //
 // Bundles live in .bundle/<hash of src and public>/. A bundle is built under a temporary name and renamed
@@ -95,6 +95,18 @@ function stage(serveUrl, plan, runDir, withAudio) {
     }
   }
   const beats = plan.beats.map((b) => {
+    if (b.anim?.dir) {
+      // the beat's animation (stringer/animation/): one JPEG per frame, f0000.jpg on, made in the locked box
+      const from = path.join(runDir, b.anim.dir);
+      const sub = `anim-${b.n}`;
+      fs.mkdirSync(path.join(dest, sub), {recursive: true});
+      for (let i = 0; i < b.anim.frames; i++) {
+        const f = `f${String(i).padStart(4, '0')}.jpg`;
+        if (!fs.existsSync(path.join(from, f))) throw new Error(`animation frame missing: ${path.join(from, f)}`);
+        fs.copyFileSync(path.join(from, f), path.join(dest, sub, f));
+      }
+      b = {...b, anim: {...b.anim, src: `${base}/${sub}`}};
+    }
     const pt = b.broll?.portrait;
     if (!pt?.file) return b;
     if (!fs.existsSync(pt.file)) throw new Error(`portrait file missing: ${pt.file}`);

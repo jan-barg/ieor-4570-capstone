@@ -32,11 +32,11 @@ const landFor = (frame) => {
 
 // The projection that puts the plan's frame [west, south, east, north] in the visible part of the map:
 // below the title, above the captions, left of TikTok's buttons.
-export function projectionFor(frame, top) {
+export function projectionFor(frame, top, bottom = L.bottom) {
   const [w, s, e, n] = frame;
   // No clipExtent: with it, d3 fills the whole box with land (Antarctica's ring around the pole).
   return geoMercator()
-    .fitExtent([[L.left, top + 18], [L.right, L.bottom - 6]], {
+    .fitExtent([[L.left, top + 18], [L.right, bottom - 6]], {
       type: 'MultiPoint', coordinates: [[w, s], [e, n], [w, n], [e, s]],
     });
 }
@@ -120,7 +120,7 @@ const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
 // Borders, country names and a few big towns (plan.py, places.context), so a pin is never alone. A name
 // that would touch a pin, its label or a name already placed is left out (pins first, then countries,
 // then towns), and a country already named by a pin is not named twice.
-function drawContext(ctx, proj, top, context, pins) {
+function drawContext(ctx, proj, top, context, pins, bottom = L.bottom) {
   if (!context) return;
   ctx.save();
   ctx.beginPath();
@@ -146,7 +146,7 @@ function drawContext(ctx, proj, top, context, pins) {
   const free = (box) => box[0] >= 2 && box[2] <= W - 2 && box[1] >= top + 2 && !placed.some((b) => hits(b, box));
   for (const c of context.countries || []) {
     const p = proj([c.lng, c.lat]);
-    if (!p || p[1] < top + 12 || p[1] > L.bottom || named.has(norm(c.name))) continue;
+    if (!p || p[1] < top + 12 || p[1] > bottom || named.has(norm(c.name))) continue;
     ctx.font = `600 8px ${SANS}`;
     const w = ctx.measureText(String(c.name).toUpperCase()).width + String(c.name).length * 1.6;
     const box = [p[0] - w / 2, p[1] - 7, p[0] + w / 2, p[1] + 1];
@@ -184,8 +184,8 @@ function drawContext(ctx, proj, top, context, pins) {
 
 // The still map: paper sky with grain above `top`, then stippled land and sea, then the context. With
 // `region`, the land dots inside it are warm (the "highlighted" copy that fades in when the place is said).
-function buildLayer(frame, top, region, context, pins) {
-  const proj = projectionFor(frame, top);
+function buildLayer(frame, top, region, context, pins, bottom) {
+  const proj = projectionFor(frame, top, bottom);
   const c = makeCanvas();
   const ctx = ctx2d(c);
   recordTexts(c, ctx);           // its place names, so a portrait can keep clear of them (placement.js)
@@ -234,17 +234,19 @@ function buildLayer(frame, top, region, context, pins) {
   }
   ctx.fillStyle = 'rgba(233,238,246,0.55)';
   ctx.fillRect(0, top, W, 0.8);
-  drawContext(ctx, proj, top, context, pins);
+  drawContext(ctx, proj, top, context, pins, bottom);
   ctx.restore();
   return c;
 }
 
 // The cache key includes the pins, since the context's names are placed around them.
 const pinKey = (pins) => (pins || []).map((k) => `${Math.round(k.x)}:${Math.round(k.y)}:${k.label || ''}`).join('|');
-const keyOf = (frame, top, tag, pins) => `map-${frame.join(',')}-${top}-${tag}-${pinKey(pins)}`;
-export const mapLayer = (frame, top, context, pins) => once(keyOf(frame, top, 'base', pins), () => buildLayer(frame, top, null, context, pins));
-export const mapLayerLit = (frame, top, region, id, context, pins) =>
-  once(keyOf(frame, top, `lit-${id}`, pins), () => buildLayer(frame, top, region, context, pins));
+// `bottom`: the lowest the map's frame reaches (a strip above an animation's window; anim.js), else L.bottom.
+const keyOf = (frame, top, tag, pins, bottom) => `map-${frame.join(',')}-${top}-${tag}-${pinKey(pins)}${bottom ? `-${bottom}` : ''}`;
+export const mapLayer = (frame, top, context, pins, bottom) =>
+  once(keyOf(frame, top, 'base', pins, bottom), () => buildLayer(frame, top, null, context, pins, bottom));
+export const mapLayerLit = (frame, top, region, id, context, pins, bottom) =>
+  once(keyOf(frame, top, `lit-${id}`, pins, bottom), () => buildLayer(frame, top, region, context, pins, bottom));
 
 // The region's outline as a dotted line, drawn up to `frac` of its length (in sketch units).
 export function dottedOutline(ctx, proj, shape, frac, color = PAL.paper) {

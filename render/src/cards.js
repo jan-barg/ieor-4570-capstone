@@ -161,13 +161,17 @@ export function drawHeadline(ctx, s) {
   // fit the title above the red bar, the "Source:" label and (when there is one) the prop's badge. With a cutout
   // portrait the bar stays high enough to leave the sticker its band above the captions (a long title gets smaller
   // type rather than lose the person; Nov 27).
+  // With an animation (s.compact, anim.js) the title keeps to the top and the window takes the room below.
   const prop = beat.broll?.kind === 'prop' && !beat.broll?.skipped;
-  const room = hasCutout(beat)
-    ? L.captionTop - stickerBand() - 3 - 22 + 6 - (L.content + 20)
-    : L.bottom - chipHeight(ctx, beat.label) - (prop ? 70 : 0) - 34 - (L.content + 20);
-  const {size, lines} = fitBox(ctx, title, {maxWidth: L.right - L.left, maxHeight: room, max: 54, min: 24, lh: 1.04});
+  const lead = s.compact ? 6 : 20;
+  const room = s.compact ? 96
+    : hasCutout(beat)
+      ? L.captionTop - stickerBand() - 3 - 22 + 6 - (L.content + 20)
+      : L.bottom - chipHeight(ctx, beat.label) - (prop ? 70 : 0) - 34 - (L.content + 20);
+  const {size, lines} = fitBox(ctx, title, {maxWidth: L.right - L.left, maxHeight: room, max: s.compact ? 40 : 54,
+    min: s.compact ? 21 : 24, lh: 1.04});
   const lh = size * 1.04;
-  const y0 = L.content + 20 + size * 0.8;
+  const y0 = L.content + lead + size * 0.8;
   ctx.font = `400 ${size}px ${SERIF}`;
   const boxes = layoutWords(ctx, lines, L.left, y0, lh);
   const said = matchSpoken(boxes.map((b) => b.word), beat.words);
@@ -183,11 +187,12 @@ export function drawHeadline(ctx, s) {
   });
   ctx.globalAlpha = 1;
   // a vermilion bar under the type that runs the length of the beat
-  const by = y0 + (lines.length - 1) * lh + 22;
+  const by = y0 + (lines.length - 1) * lh + (s.compact ? 14 : 22);
   ctx.fillStyle = PAL.vermilion;
   ctx.fillRect(L.left, by, (L.right - L.left) * clamp01(t / Math.max(1, beat.frames - 10)), 3);
+  s.textEnd = by + 3;
   aiMark(ctx, true);
-  sourceChip(ctx, beat.label, t);
+  if (!s.compact) sourceChip(ctx, beat.label, t);
   ctx.restore();
 }
 

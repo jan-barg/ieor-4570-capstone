@@ -20,7 +20,7 @@ import re
 import unicodedata
 
 from .. import shots
-from . import people, places
+from . import people, places, transitions as tx
 from .check import as_headline
 
 VERSION = "plan-1"
@@ -247,13 +247,36 @@ def _beat(b: dict, i: int, narr: dict, event: dict, g, swaps: list, p7) -> dict:
     return out
 
 
+def with_animation(pb: dict, anim: dict) -> None:
+    """The custom animation (stringer/animation/, off by default) plays in a window under this beat's words
+    (render/src/anim.js): the beat is marked an illustration and its prop or portrait gives way to it."""
+    pb["anim"] = dict(dir=anim["dir"], frames=anim["frames"], frame=anim.get("frame") or "card",
+                      cues=anim.get("cues") or {})
+    br = pb.get("broll") or {}
+    if br.get("kind") not in (None, "none"):
+        pb["broll"] = dict(kind="none", name="", was=dict(kind=br.get("kind"), name=br.get("name")),
+                           skipped="the animation is in its place")
+    pb["illustration"] = True
+
+
 def build(beats: list[dict], narr: dict, script: dict, event: dict, *, swaps: list | None = None,
-          music: str | None = None, g=None, p7=None) -> dict:
+          music: str | None = None, g=None, p7=None, anim: dict | None = None, transitions: str = "off") -> dict:
     """The render plan. narr: voice.narrate()'s result for the same beats. p7: module 7's packet, so a
-    swapped beat keeps its title only when it passes the on-screen check."""
+    swapped beat keeps its title only when it passes the on-screen check. anim: the custom animation's window
+    for one beat ({"beat": index, "frames", "dir", "cues", "frame"}), or None (the switch off, or a fallback).
+    transitions: how beats give way to each other (transitions.py); "off", the default, cuts every time."""
     g = g or places.default()
     swaps = list(swaps or [])
     plan_beats = [_beat(b, i, narr, event, g, swaps, p7) for i, b in enumerate(beats)]
+    anim_note = None
+    if anim is not None:
+        pb = plan_beats[anim["beat"]]
+        if pb["frames"] == anim["frames"]:
+            with_animation(pb, anim)
+            anim_note = dict(beat=pb["n"], frame=pb["anim"]["frame"])
+        else:                                     # never a window that runs short or long: the beat keeps its shot
+            anim_note = dict(beat=pb["n"], skipped=f"the animation has {anim['frames']} frames, its beat {pb['frames']}")
+    tx_note = tx.add(plan_beats, transitions)
     # On screen the credits name the site; the full links go in the post's caption (Jan, Nov 26: "just site name").
     credits = [c for c in script.get("credits") or [] if not re.match(r"https?://", str(c))]
     links = [c for c in script.get("credits") or [] if re.match(r"https?://", str(c))]
@@ -267,5 +290,6 @@ def build(beats: list[dict], narr: dict, script: dict, event: dict, *, swaps: li
         beats=plan_beats, captions=captions(narr["words"], shown_words(plan_beats, narr)),
         subtitles=captions(narr["words"]), post=dict(links=links),
         sources_card=dict(script.get("sources_card") or {}, credits=credits + [x for x in [voice_credit] if x] + portrait_credits),
-        overlays=dict(ai_mark=AI_MARK), swaps=swaps,
+        overlays=dict(ai_mark=AI_MARK), swaps=swaps, **({"animation": anim_note} if anim_note else {}),
+        **({"transitions": tx_note} if tx_note else {}),
         voice=dict(narr["voice"], seconds=narr["seconds"], chars=narr["chars"], words_per_second=narr.get("words_per_second")))

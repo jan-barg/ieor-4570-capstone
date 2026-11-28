@@ -9,7 +9,9 @@ import {drawBroll} from './props.js';
 import {loadPortrait} from './portraits.js';
 import {finishedLayout} from './placement.js';
 import {layoutProbe} from './layout.js';
+import {animFrameSrc, drawAnim, loadAnimFrame} from './anim.js';
 import {drawBigNumber, drawClaims, drawDocument, drawQuote, drawTally, drawTimeline} from './datashots.js';
+import {Moving} from './transitions.js';
 
 function drawNotYet(ctx, s) {
   ctx.drawImage(paperLayer(), 0, 0);
@@ -37,8 +39,10 @@ export const SHOTS = {
 };
 
 // One canvas for one beat. The first frame waits (delayRender) until the fonts and the beat's portrait are ready.
-function Shot({beat, plan, from}) {
-  const frame = useCurrentFrame();
+// With transitions (transitions.js) a beat's canvas is up a little before its first frame (`lead` frames, showing that
+// first frame) and after its last (showing the last), while the change between two beats plays.
+function Shot({beat, plan, from, lead = 0}) {
+  const frame = Math.min(Math.max(0, useCurrentFrame() - lead), Math.max(0, beat.end - beat.start - 1));
   const ref = useRef(null);
   const [handle] = useState(() => delayRender(`beat ${beat.n}`));
   const released = useRef(false);
@@ -52,24 +56,44 @@ function Shot({beat, plan, from}) {
   }, [beat]);
   useLayoutEffect(() => {
     if (!ready || !ref.current) return;
-    const ctx = ref.current.getContext('2d', {willReadFrequently: true});
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, PX_W, PX_H);
-    const st = {beat, t: frame, frame: from + frame, plan};
-    // a cutout portrait needs to know where the finished beat's words will be (placement.js)
-    if (beat.broll?.portrait?.cutoutSrc) {
-      st.finished = finishedLayout(beat, plan, SHOTS[beat.shot] || drawNotYet, (c) => {
-        if (beat.illustration) { c.save(); c.scale(K, K); illustrationTag(c, true); c.restore(); }
-      });
+    const paint = (animImg) => {
+      const ctx = ref.current.getContext('2d', {willReadFrequently: true});
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, PX_W, PX_H);
+      // a beat with an animation (anim.js) draws its words compactly at the top and the window below them
+      const st = {beat, t: frame, frame: from + frame, plan, compact: !!beat.anim};
+      // a cutout portrait needs to know where the finished beat's words will be (placement.js)
+      if (beat.broll?.portrait?.cutoutSrc) {
+        st.finished = finishedLayout(beat, plan, SHOTS[beat.shot] || drawNotYet, (c) => {
+          if (beat.illustration) { c.save(); c.scale(K, K); illustrationTag(c, true); c.restore(); }
+        });
+      }
+      const probe = plan.debug_layout ? layoutProbe(ctx) : null;      // eval 7 only (layout.js)
+      (SHOTS[beat.shot] || drawNotYet)(ctx, st);
+      if (beat.anim) drawAnim(ctx, st, animImg);
+      drawBroll(ctx, st);
+      if (probe) probe.report(beat, from + frame, st);
+    };
+    const release = () => {
+      if (!released.current) {
+        released.current = true;
+        continueRender(handle);
+      }
+    };
+    if (!beat.anim) {
+      paint(null);
+      release();
+      return;
     }
-    const probe = plan.debug_layout ? layoutProbe(ctx) : null;      // eval 7 only (layout.js)
-    (SHOTS[beat.shot] || drawNotYet)(ctx, st);
-    drawBroll(ctx, st);
-    if (probe) probe.report(beat, from + frame, st);
-    if (!released.current) {
-      released.current = true;
-      continueRender(handle);
-    }
+    // the animation's frame for this video frame is an image file: wait for it
+    const wait = delayRender(`beat ${beat.n} animation frame ${frame}`);
+    let live = true;
+    loadAnimFrame(animFrameSrc(beat, frame)).then((img) => {
+      if (live && ref.current) paint(img);
+      release();
+      continueRender(wait);
+    });
+    return () => { live = false; };
   }, [frame, ready, beat, plan, from, handle]);
   return <canvas ref={ref} width={PX_W} height={PX_H} style={{position: 'absolute', width: '100%', height: '100%'}} />;
 }
@@ -103,13 +127,25 @@ const fromDb = (db) => Math.pow(10, db / 20);
 export const Video = ({plan, audioBase = 'run'}) => {
   const music = plan.audio?.music;
   const gain = fromDb(plan.audio?.music_db ?? -20);
+  // with transitions on, a beat stays up while the next one comes in, and the beats share a layer of their own
+  // (so a sheet on top during a change is still under the captions)
+  const moving = plan.beats.some((b) => b.enter);
+  const pre = (b) => (b?.enter ? b.enter.pre || 0 : 0);
+  const beats = plan.beats.map((beat, i) => {
+    const next = plan.beats[i + 1];
+    const lead = pre(beat);                                           // up before its first frame
+    const hold = next?.enter ? next.enter.frames - pre(next) : 0;     // up after its last
+    return (
+      <Sequence key={beat.n} from={beat.start - lead} durationInFrames={Math.max(1, beat.end - beat.start + lead + hold)}>
+        <Moving beat={beat} next={next} lead={lead} width={plan.width} height={plan.height}>
+          <Shot beat={beat} plan={plan} from={beat.start} lead={lead} />
+        </Moving>
+      </Sequence>
+    );
+  });
   return (
     <AbsoluteFill style={{backgroundColor: PAL.paper}}>
-      {plan.beats.map((beat) => (
-        <Sequence key={beat.n} from={beat.start} durationInFrames={Math.max(1, beat.end - beat.start)}>
-          <Shot beat={beat} plan={plan} from={beat.start} />
-        </Sequence>
-      ))}
+      {moving ? <AbsoluteFill style={{isolation: 'isolate'}}>{beats}</AbsoluteFill> : beats}
       <Captions captions={plan.captions || []} />
       {plan.audio?.voice ? <Audio src={staticFile(`${audioBase}/${plan.audio.voice}`)} /> : null}
       {music ? (

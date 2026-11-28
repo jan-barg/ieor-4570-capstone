@@ -482,6 +482,20 @@ def test_plan_frames_follow_the_voice(tmp_path, geo, no_portraits):
     assert m["mark"] == "quote" and 0 <= m["start"] < m["end"] <= q["frames"]
 
 
+def test_transitions_only_add_how_each_beat_comes_in(tmp_path, geo, no_portraits):
+    s = script()
+    res = checked(s)
+    n = narrated(res["beats"], tmp_path)
+    off = plan.build(res["beats"], n, s, EVENT, swaps=res["swaps"], g=geo, p7=packet())
+    on = plan.build(res["beats"], n, s, EVENT, swaps=res["swaps"], g=geo, p7=packet(), transitions="mix")
+    assert "transitions" not in off and not any("enter" in b for b in off["beats"])
+    assert on["transitions"]["style"] == "mix" and len(on["transitions"]["kinds"]) == len(on["beats"]) - 1
+    assert any("enter" in b for b in on["beats"])
+    bare = dict(on, beats=[{k: v for k, v in b.items() if k != "enter"} for b in on["beats"]])
+    bare.pop("transitions")
+    assert bare == off
+
+
 def test_a_map_gets_the_lakes_in_its_frame_big_enough_to_see(tmp_path, geo, no_portraits):
     ring = lambda w, s_, e, n: [[w, s_], [e, s_], [e, n], [w, n], [w, s_]]
     lakes = [dict(name="Lake Orrin", bbox=[12.2, 51.6, 12.9, 52.1], rings=[ring(12.2, 51.6, 12.9, 52.1), ring(12.4, 51.7, 12.5, 51.8)]),

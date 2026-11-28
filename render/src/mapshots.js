@@ -23,13 +23,16 @@ export function drawMap(ctx, s) {
 
   ctx.save();
   ctx.scale(K, K);
-  const {size, lines} = fit(ctx, title, {maxWidth: L.right - L.left, maxLines: 2, max: 30, min: 21});
+  const {size, lines} = fit(ctx, title, {maxWidth: L.right - L.left, maxLines: 2, max: s.compact ? 26 : 30, min: 21});
   const lh = size * 1.2;
-  const titleY = L.content + 26;
-  const top = Math.round(titleY + (lines.length - 1) * lh + 20);
+  const titleY = L.content + (s.compact ? 20 : 26);
+  const top = Math.round(titleY + (lines.length - 1) * lh + (s.compact ? 14 : 20));
   ctx.restore();
+  // With an animation (s.compact, anim.js) the map is a strip under the title, a locator above the window.
+  const bottom = s.compact ? top + 78 : undefined;
+  if (s.compact) s.textEnd = bottom;
 
-  const proj = projectionFor(m.frame, top);
+  const proj = projectionFor(m.frame, top, bottom);
   const pts = m.places.map((p) => proj([p.lng, p.lat]));
   const focus = kind === 'map_link' ? [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2] : pts[0];
   const z = 1 + 0.05 * easeInOut(t / Math.max(1, beat.frames));
@@ -46,11 +49,11 @@ export function drawMap(ctx, s) {
   ctx.translate(focus[0] * K, focus[1] * K);
   ctx.scale(z, z);
   ctx.translate(-focus[0] * K, -focus[1] * K);
-  ctx.drawImage(mapLayer(m.frame, top, {...m.context, lakes: m.lakes}, keep), 0, 0);
+  ctx.drawImage(mapLayer(m.frame, top, {...m.context, lakes: m.lakes}, keep, bottom), 0, 0);
   if (m.outline) {
     // the place's own land turns warm as it is said
     ctx.globalAlpha = clamp01((t - at) / 10);
-    ctx.drawImage(mapLayerLit(m.frame, top, m.outline, `${s.plan.story.id}-${beat.n}`, {...m.context, lakes: m.lakes}, keep), 0, 0);
+    ctx.drawImage(mapLayerLit(m.frame, top, m.outline, `${s.plan.story.id}-${beat.n}`, {...m.context, lakes: m.lakes}, keep, bottom), 0, 0);
     ctx.globalAlpha = 1;
   }
   ctx.scale(K, K);
@@ -101,6 +104,6 @@ export function drawMap(ctx, s) {
   drawDecodingText(ctx, lines, {x: L.left, y: titleY, size, lineHeight: lh, font: `400 ${size}px ${SERIF}`, color: PAL.ink,
     revealed: typed(t), frame: s.frame});
   aiMark(ctx, false);
-  sourceChip(ctx, beat.label, t);
+  if (!s.compact) sourceChip(ctx, beat.label, t);
   ctx.restore();
 }

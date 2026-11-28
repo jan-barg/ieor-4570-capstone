@@ -17,7 +17,9 @@ page; it never waits the run, and a failure there never stops the video. Its res
 Two things run beside others instead of after them (Nov 27, for the 5 minutes a viewer waits): the last
 Story File calls (story_file.build_story's lanes), and the fact check's model, which starts as soon as
 the claims are final and so finishes during the Story File step. Its seconds are in the story_file row;
-its dollars are moved to the fact_check row.
+its dollars are moved to the fact_check row. With the custom animation on (STRINGER_ANIMATION=1; off by default,
+stringer/animation/), its storyboard and drawing start once module 8 has checked the script and run beside the
+voice; their dollars land in the video row (models.on_cost counts them as they come).
 
 One Langfuse trace per video: the run opens it and every model call, search and video step joins it,
 with one span per step carrying its seconds and dollars. The id is rec["trace_id"].
@@ -52,7 +54,7 @@ import time
 from pathlib import Path
 
 from . import fact_check, lens as lens_step, models, outlets, paths, pick, same_story, story_file, tracing
-from . import balance, followup
+from . import animation, balance, followup
 from . import progress as progress_mod
 from . import script_writer as sw
 from .events import from_live
@@ -337,8 +339,9 @@ def run(raw_event: dict, ticket=None, *, stories_dir: Path | None = None, raw_di
 
             # module 8: the video
             t0 = begin("video")
+            with_anim = {"anim": True} if animation.enabled() else {}     # module 8 starts it; off: the call as before
             vrec = make.make(d, voice_engine, music=music if music is not None else
-                             (make.MUSIC if make.MUSIC.exists() else None), render=render, trace_id=tid)
+                             (make.MUSIC if make.MUSIC.exists() else None), render=render, trace_id=tid, **with_anim)
             vcredits = ((vrec.get("steps") or {}).get("voice") or {}).get("credits") or 0
             steps = {k: v.get("seconds") for k, v in (vrec.get("steps") or {}).items() if isinstance(v, dict)}
             vsteps = vrec.get("steps") or {}

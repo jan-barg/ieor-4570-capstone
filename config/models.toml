@@ -37,6 +37,11 @@ script = "gpt-6.1-terra"                 # module 7 writer (decided Nov 26, Jan:
 script_line_check = "haiku-5-5"         # module 7 line check: the fact check's model (decided Nov 26, Jan: all as recommended)
 script_words = "gemini-3.5-flash-lite"  # module 7 loaded-words check: wording-1's judge (Nov 26, same)
 voice_direction = "haiku-5-5"            # module 8 voice director (Jan, Nov 26: "v4 turbo with expressive tags"; ~0.07 cents a story)
+# The custom animation (stringer/animation/; off by default, STRINGER_ANIMATION=1 turns it on). Models from the Nov 27
+# test rounds 2-6: a low-effort storyboard, Sonnet for the drawing code, a low-effort pick of each cue's spoken word.
+anim_storyboard = "haiku-5-5"
+anim_drawing = "sonnet-5-5"
+anim_cues = "haiku-5-5"
 
 # ---- Time limits inside a live video (seconds for one model call; stringer/pipeline.py turns them on).
 # About three times the slowest normal call in the Nov 27 live runs. Each call already has one retry, so
@@ -58,6 +63,9 @@ script = 100
 script_line_check = 75
 script_words = 30
 voice_direction = 30
+anim_storyboard = 60
+anim_drawing = 240      # a drawing runs beside the writer, the check and the voice; past the voice it is "late" anyway
+anim_cues = 30
 
 # ---- Models. shortlist = true: the smoke test checks it answers and reports cached tokens ----
 

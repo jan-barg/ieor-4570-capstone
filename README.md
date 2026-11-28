@@ -55,6 +55,7 @@ Keychain is a fallback on a Mac. Vertex models use Application Default Credentia
 | `stringer/video/`, `scripts/make_videos.py` | Module 8: a script in, a vertical MP4 out. Checks the script, adds voice directions, records the ElevenLabs voice with its timings, finds places and portraits, builds the render plan, renders, then sets loudness and writes the poster and captions (`make.py` runs the steps in order) |
 | `render/` | Module 8's drawing code (Remotion): every shot kind, the maps and the props. `render.mjs` draws a render plan into an MP4 |
 | `scripts/eval_video.py`, `stringer/video/evals.py` | Module 8's evals and their visual report |
+| `stringer/animation/`, `render/anim/`, `render/src/anim.js`, `scripts/animation_ab.py` | The custom animation, off by default: one beat gets a short paper-cutout animation drawn by a model with the scene kit, in a window under its words. The model's code runs in a locked box (its own headless Chrome, no network, no eval, no page) that hands back JPEG frames. `animation_ab.py` makes A/B videos and their report |
 | `scripts/build_video_places.py`, `scripts/count_people.py`, `scripts/fetch_portraits.py` | One-time builds for module 8: the place index from the map files, the list of people to draw, and their photos |
 | `stringer/evals/` | The shared eval runner: runs a step on the frozen stories with a chosen model, scores it against an answer key, caches every model answer, hard cost cap, one Langfuse trace per run, a visual report per step (`report.py`). One plug-in per step, listed in `steps.py` |
 | `tests/` | Offline tests on made-up data |
@@ -97,6 +98,35 @@ Eval results, the model-answer cache and the reports are in `stringer_private/ev
 already made in an eval is free the next time, so applying the chosen setup to all stories after
 its eval costs nothing. `remerge_frozen` rewrites `articles.jsonl`, so run
 `filter_articles --reapply` and then `pick_articles` after it.
+
+## The custom animation (off by default)
+
+With `STRINGER_ANIMATION=1` in the environment, module 8 gives one beat of each video a model-drawn animation
+(design: the Nov 27 test rounds). Once the script is checked, its storyboard (Haiku) reads the beats a window fits
+under, picks one and plans what that beat's sentence tells; the drawing (Sonnet) and a small call tying each cue to
+a spoken word run beside the voice, and once the voice is recorded the drawing's code runs in the box at the beat's
+exact length. The writer's prompt never changes. Anything that goes wrong (no beat a window fits under, no
+storyboard, refused or failing or slow code, a drawing not ready 40 s after the voice) leaves the beat its normal
+shot, and `video/animation.json` says why. `STRINGER_ANIMATION_FRAME=card` (default) or `plate` picks the window's
+look. About 4-9 cents a video; with no beat a window fits under, nothing is paid.
+
+```bash
+STRINGER_ANIMATION=1 .venv/bin/python scripts/make_videos.py <id8>     # one video with the animation (paid)
+.venv/bin/python scripts/animation_ab.py <id8> ... --out <folder> --judge   # A/B videos, side by side, report page (paid once, then cached)
+```
+
+## Transitions between beats (on by default)
+
+Module 8 draws the mix (`stringer/video/transitions.py`; Jan's OK, Nov 28): a tear out of the hook, a sheet
+sliding in for the sides card, a push from map to map, a dissolve where a map and a card meet and into the sources
+card, and cuts between cards. Each change starts a third of its length before the next line's first word. Free: code
+decides, the renderer draws it. `STRINGER_TRANSITIONS=off` makes every change a cut, as before; a kind's name
+(`dissolve`, `slide`, `push`, `tear`, `wipe`) puts that kind at every change.
+
+```bash
+STRINGER_TRANSITIONS=off .venv/bin/python scripts/make_videos.py <id8>     # cuts only
+.venv/bin/python scripts/transitions_demo.py --ab <A/B folder> --out <folder> --stories <id8>,... --kinds-story <id8>   # saved videos drawn again, nothing paid
+```
 
 ## One live event, end to end
 
